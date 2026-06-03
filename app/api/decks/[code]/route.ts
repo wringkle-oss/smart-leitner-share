@@ -1,16 +1,37 @@
-import { NextRequest, NextResponse } from "next/server";
-import { normalizeDeckCode } from "@/lib/deck-code";
+import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 
+function normalizeDeckCode(code: string): string {
+  return String(code || "")
+    .trim()
+    .toUpperCase();
+}
+
 export async function GET(
-  _request: NextRequest,
-  context: { params: Promise<{ code: string }> }
+  request: Request,
+  context: { params: Promise<{ code: string }> | { code: string } }
 ) {
   try {
-    const params = await context.params;
-    const normalizedCode = normalizeDeckCode(params.code);
+    const resolvedParams =
+      context.params instanceof Promise
+        ? await context.params
+        : context.params;
 
-    console.log("GET deck request:", normalizedCode);
+    const normalizedCode = normalizeDeckCode(resolvedParams.code);
+
+    console.log("GET /api/decks/[code]", {
+      rawCode: resolvedParams.code,
+      normalizedCode
+    });
+
+    if (!normalizedCode) {
+      return NextResponse.json(
+        {
+          error: "Missing deck code"
+        },
+        { status: 400 }
+      );
+    }
 
     const { data: deck, error: deckError } = await supabaseAdmin
       .from("decks")
@@ -44,12 +65,6 @@ export async function GET(
       );
     }
 
-    console.log("Deck found:", {
-      id: deck.id,
-      code: deck.code,
-      name: deck.name
-    });
-
     const { data: cards, error: cardsError } = await supabaseAdmin
       .from("cards")
       .select("front, back, position")
@@ -69,12 +84,6 @@ export async function GET(
         { status: 500 }
       );
     }
-
-    console.log("Cards found:", {
-      deckId: deck.id,
-      code: deck.code,
-      cardCount: cards?.length ?? 0
-    });
 
     return NextResponse.json({
       code: deck.code,
