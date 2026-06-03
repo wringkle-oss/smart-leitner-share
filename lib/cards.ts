@@ -1,93 +1,44 @@
-export type Card = {
+export type ParsedCard = {
   front: string;
   back: string;
 };
 
-export function parseCards(rawText: string): Card[] {
-  const trimmed = rawText.trim();
+export function parseCards(rawText: string): ParsedCard[] {
+  return rawText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      if (line.includes("\t")) {
+        const [front, ...rest] = line.split("\t");
 
-  if (!trimmed) {
-    throw new Error("Paste at least one card.");
-  }
-
-  const delimiter = chooseDelimiter(trimmed);
-  const rows = parseDelimitedRows(trimmed, delimiter)
-    .map((row) => row.map((cell) => cell.trim()))
-    .filter((row) => row.some(Boolean));
-
-  const dataRows = hasHeader(rows[0]) ? rows.slice(1) : rows;
-  const cards = dataRows
-    .map(([front, back]) => ({ front: front ?? "", back: back ?? "" }))
-    .filter((card) => card.front && card.back);
-
-  if (cards.length === 0) {
-    throw new Error("Add cards with front and back columns.");
-  }
-
-  return cards;
-}
-
-function chooseDelimiter(text: string): "," | "\t" {
-  const firstLine = text.split(/\r?\n/, 1)[0] ?? "";
-  const tabCount = (firstLine.match(/\t/g) ?? []).length;
-  const commaCount = (firstLine.match(/,/g) ?? []).length;
-
-  return tabCount > commaCount ? "\t" : ",";
-}
-
-function hasHeader(row: string[] | undefined): boolean {
-  if (!row || row.length < 2) {
-    return false;
-  }
-
-  return (
-    row[0].trim().toLowerCase() === "front" &&
-    row[1].trim().toLowerCase() === "back"
-  );
-}
-
-function parseDelimitedRows(text: string, delimiter: "," | "\t"): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let cell = "";
-  let inQuotes = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    const nextChar = text[index + 1];
-
-    if (char === '"') {
-      if (inQuotes && nextChar === '"') {
-        cell += '"';
-        index += 1;
-      } else {
-        inQuotes = !inQuotes;
+        return {
+          front: front.trim(),
+          back: rest.join("\t").trim()
+        };
       }
-      continue;
-    }
 
-    if (char === delimiter && !inQuotes) {
-      row.push(cell);
-      cell = "";
-      continue;
-    }
+      if (line.includes(",")) {
+        const [front, ...rest] = line.split(",");
 
-    if ((char === "\n" || char === "\r") && !inQuotes) {
-      if (char === "\r" && nextChar === "\n") {
-        index += 1;
+        return {
+          front: front.trim(),
+          back: rest.join(",").trim()
+        };
       }
-      row.push(cell);
-      rows.push(row);
-      row = [];
-      cell = "";
-      continue;
-    }
 
-    cell += char;
-  }
+      const parts = line.split(/\s{2,}/);
 
-  row.push(cell);
-  rows.push(row);
+      if (parts.length >= 2) {
+        return {
+          front: parts[0].trim(),
+          back: parts.slice(1).join(" ").trim()
+        };
+      }
 
-  return rows;
+      return null;
+    })
+    .filter((card): card is ParsedCard => {
+      return !!card && card.front.length > 0 && card.back.length > 0;
+    });
 }

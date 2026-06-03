@@ -1,46 +1,112 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseCards } from "@/lib/cards";
-import { isValidDeckCode, normalizeDeckCode } from "@/lib/deck-code";
-import { createDeck, DeckCodeConflictError } from "@/lib/decks";
+import { deckCodeValidationMessage, deckCodeRegex } from "@/lib/deck-code";
+import { supabaseAdmin } from "@/lib/supabase";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const code = String(body.code ?? "");
-    const normalizedCode = normalizeDeckCode(code);
-    const deckName = String(body.deckName ?? "");
-    const rawText = String(body.rawText ?? "");
+    const normalizedCode = String(body.code || "").trim().toUpperCase();
+    const rawDeckName = String(body.deckName || "").trim();
+    const rawText = String(body.rawText || "");
 
-    if (!isValidDeckCode(normalizedCode)) {
-      return NextResponse.json({ error: "Invalid deck code" }, { status: 400 });
+    if (!deckCodeRegex.test(normalizedCode)) {
+      return NextResponse.json(
+        { error: deckCodeValidationMessage },
+        { status: 400 }
+      );
+    }
+
+    if (!rawText.trim()) {
+      return NextResponse.json(
+        { error: "Flashcard text is required" },
+        { status: 400 }
+      );
     }
 
     const cards = parseCards(rawText);
-    const savedCode = await createDeck({
-      code: normalizedCode,
-      deckName,
-      rawText,
-      cards
-    });
 
-    return NextResponse.json({
-      code: savedCode,
-      deckName: deckName.trim() || savedCode,
-      cardCount: cards.length
-    });
-  } catch (error) {
-    if (error instanceof DeckCodeConflictError) {
+    if (cards.length === 0) {
+      return NextResponse.json(
+        { error: "No valid cards found. Use front<TAB>back, CSV, or TSV." },
+        { status: 400 }
+      );
+    }
+
+    const { data: existingDeck, error: existingError } = await supabaseAdmin
+      .from("decks")
+      .select("id")
+      .eq("code", normalizedCode)
+      .maybeSingle();
+
+    if (existingError) {
+      console.error(existingError);
+
+      return NextResponse.json(
+        { error: "Failed to check deck code" },
+        { status: 500 }
+      );
+    }
+
+    if (existingDeck) {
       return NextResponse.json(
         { error: "Deck code already exists" },
         { status: 409 }
       );
     }
 
+    const deckName = rawDeckName || normalizedCode;
+
+    const { data: deck, error: deckError } = await supabaseAdmin
+      .from("decks")
+      .insert({
+        code: normalizedCode,
+        name: deckName,
+        raw_text: rawText
+      })
+      .select("id, code, name")
+      .single();
+
+    if (deckError || !deck) {
+      console.error(deckError);
+
+      return NextResponse.json(
+        { error: "Failed to create deck" },
+        { status: 500 }
+      );
+    }
+
+    const cardRows = cards.map((card, index) => ({
+      deck_id: deck.id,
+      front: card.front,
+      back: card.back,
+      position: index
+    }));
+
+    const { error: cardsError } = await supabaseAdmin
+      .from("cards")
+      .insert(cardRows);
+
+    if (cardsError) {
+      console.error(cardsError);
+
+      return NextResponse.json(
+        { error: "Failed to save cards" },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({
+      code: deck.code,
+      deckName: deck.name,
+      cardCount: cards.length
+    });
+  } catch (error) {
+    console.error(error);
+
     return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Could not save deck."
-      },
-      { status: 400 }
+      { error: "Unexpected server error" },
+      { status: 500 }
     );
   }
 }

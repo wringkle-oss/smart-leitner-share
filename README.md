@@ -8,7 +8,7 @@ A small Next.js App Router app for sharing flashcard decks with short codes.
 - User-defined Deck Code that is unique and used by the Android app
 - `POST /api/decks` accepts `{ "code": "...", "deckName": "...", "rawText": "..." }`
 - `GET /api/decks/[code]` returns `{ "code": "...", "deckName": "...", "cards": [...] }`
-- Supabase-ready storage with a local JSON fallback for development
+- Supabase-only storage for Vercel serverless deployment
 
 ## Run locally
 
@@ -23,9 +23,10 @@ Open `http://localhost:3000`.
 
 1. Run `supabase/schema.sql` in your Supabase SQL editor.
 2. Copy `.env.example` to `.env.local`.
-3. Fill in `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
+3. Fill in `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
 
-Without those variables, decks are saved to `.data/decks.json` locally.
+Deck data is always saved to Supabase. The app does not use local filesystem
+storage for decks.
 
 Deck Code is required, normalized to uppercase, and must match
 `/^[A-Z0-9_-]{3,32}$/`. Deck Name is optional; if it is empty, the app uses
