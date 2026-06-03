@@ -8,6 +8,7 @@ A small Next.js App Router app for sharing flashcard decks with short codes.
 - User-defined Deck Code that is unique and used by the Android app
 - `POST /api/decks` accepts `{ "code": "...", "deckName": "...", "rawText": "..." }`
 - `GET /api/decks/[code]` returns `{ "code": "...", "deckName": "...", "cards": [...] }`
+- `GET /api/decks/recent?days=7` returns all decks uploaded within the last N days
 - Supabase-only storage for Vercel serverless deployment
 
 ## Run locally
