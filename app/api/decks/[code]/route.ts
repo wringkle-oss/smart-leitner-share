@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
+import { normalizeDeckCode } from "@/lib/deck-code";
 import { supabaseAdmin } from "@/lib/supabase";
 
 export async function GET(
   _request: NextRequest,
-  { params }: { params: Promise<{ code: string }> }
+  context: { params: Promise<{ code: string }> }
 ) {
   try {
-    const { code } = await params;
-    const normalizedCode = String(code || "").trim().toUpperCase();
+    const params = await context.params;
+    const normalizedCode = normalizeDeckCode(params.code);
+
+    console.log("GET deck request:", normalizedCode);
 
     const { data: deck, error: deckError } = await supabaseAdmin
       .from("decks")
@@ -16,17 +19,36 @@ export async function GET(
       .maybeSingle();
 
     if (deckError) {
-      console.error(deckError);
+      console.error("Deck lookup error:", deckError);
 
       return NextResponse.json(
-        { error: "Failed to load deck" },
+        {
+          error: "Failed to load deck",
+          detail: deckError.message,
+          hint: deckError.hint,
+          code: deckError.code
+        },
         { status: 500 }
       );
     }
 
     if (!deck) {
-      return NextResponse.json({ error: "Deck not found" }, { status: 404 });
+      console.log("Deck not found:", normalizedCode);
+
+      return NextResponse.json(
+        {
+          error: "Deck not found",
+          requestedCode: normalizedCode
+        },
+        { status: 404 }
+      );
     }
+
+    console.log("Deck found:", {
+      id: deck.id,
+      code: deck.code,
+      name: deck.name
+    });
 
     const { data: cards, error: cardsError } = await supabaseAdmin
       .from("cards")
@@ -35,13 +57,24 @@ export async function GET(
       .order("position", { ascending: true });
 
     if (cardsError) {
-      console.error(cardsError);
+      console.error("Cards lookup error:", cardsError);
 
       return NextResponse.json(
-        { error: "Failed to load cards" },
+        {
+          error: "Failed to load cards",
+          detail: cardsError.message,
+          hint: cardsError.hint,
+          code: cardsError.code
+        },
         { status: 500 }
       );
     }
+
+    console.log("Cards found:", {
+      deckId: deck.id,
+      code: deck.code,
+      cardCount: cards?.length ?? 0
+    });
 
     return NextResponse.json({
       code: deck.code,
@@ -52,10 +85,13 @@ export async function GET(
       }))
     });
   } catch (error) {
-    console.error(error);
+    console.error("Unexpected GET deck error:", error);
 
     return NextResponse.json(
-      { error: "Unexpected server error" },
+      {
+        error: "Unexpected server error",
+        detail: error instanceof Error ? error.message : String(error)
+      },
       { status: 500 }
     );
   }

@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseCards } from "@/lib/cards";
-import { deckCodeValidationMessage, deckCodeRegex } from "@/lib/deck-code";
+import {
+  deckCodeValidationMessage,
+  deckCodeRegex,
+  normalizeDeckCode
+} from "@/lib/deck-code";
 import { supabaseAdmin } from "@/lib/supabase";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const normalizedCode = String(body.code || "").trim().toUpperCase();
+    const normalizedCode = normalizeDeckCode(body.code);
     const rawDeckName = String(body.deckName || "").trim();
     const rawText = String(body.rawText || "");
 
@@ -76,6 +80,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    console.log("Created deck:", {
+      id: deck.id,
+      code: deck.code,
+      name: deck.name
+    });
+
     const cardRows = cards.map((card, index) => ({
       deck_id: deck.id,
       front: card.front,
@@ -95,6 +105,12 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
+
+    console.log("Created cards:", {
+      deckId: deck.id,
+      code: deck.code,
+      cardCount: cards.length
+    });
 
     return NextResponse.json({
       code: deck.code,
