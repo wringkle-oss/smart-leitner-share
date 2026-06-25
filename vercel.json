@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/import-daily-ebs",
+      "schedule": "0 20 * * 0-5"
+    }
+  ]
+}
