@@ -14,6 +14,10 @@ type EbsSection = {
   cards: Card[];
 };
 
+type ImportOptions = {
+  force?: boolean;
+};
+
 type NaverPostListItem = {
   logNo?: string | number;
   title?: string;
@@ -38,6 +42,7 @@ export type ImportDailyEbsResult = {
   date: string;
   sourceUrl: string | null;
   createdDecks: string[];
+  updatedDecks: string[];
   skippedDecks: string[];
   sections: Array<{
     key: SectionKey;
@@ -45,6 +50,7 @@ export type ImportDailyEbsResult = {
     cardCount: number;
     code?: string;
     skipped?: boolean;
+    updated?: boolean;
   }>;
 };
 
@@ -55,17 +61,20 @@ const CATEGORY_URL =
 const MOBILE_BASE_URL = "https://m.blog.naver.com";
 
 const sectionLabels: Record<SectionKey, string> = {
-  BODY: "본문",
-  WORD: "단어",
-  PATT: "패턴",
-  DIAL: "대화문"
+  BODY: "\uBCF8\uBB38",
+  WORD: "\uB2E8\uC5B4",
+  PATT: "\uD328\uD134",
+  DIAL: "\uB300\uD654\uBB38"
 };
 
 const userAgent =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
-export async function importDailyEbsDecks(date = getSeoulDate()) {
+export async function importDailyEbsDecks(
+  date = getSeoulDate(),
+  options: ImportOptions = {}
+): Promise<ImportDailyEbsResult> {
   const post = await findPostForDate(date);
 
   if (!post) {
@@ -74,8 +83,9 @@ export async function importDailyEbsDecks(date = getSeoulDate()) {
 
   const html = await fetchText(post.sourceUrl);
   const lines = extractContentLines(html, date);
-  const sections = buildSections(lines);
+  const sections = await buildSections(lines);
   const createdDecks: string[] = [];
+  const updatedDecks: string[] = [];
   const skippedDecks: string[] = [];
   const savedSections: ImportDailyEbsResult["sections"] = [];
 
@@ -85,11 +95,13 @@ export async function importDailyEbsDecks(date = getSeoulDate()) {
       continue;
     }
 
-    const deckName = `입트영 ${date} ${section.label}`;
+    assertCardsAreComplete(section);
+
+    const deckName = `\uC785\uD2B8\uC601 ${date} ${section.label}`;
     const prefix = `IT${formatCompactDate(date)}-${section.key}-`;
     const existingDeck = await findExistingDeckByPrefix(prefix);
 
-    if (existingDeck) {
+    if (existingDeck && !options.force) {
       skippedDecks.push(existingDeck.code);
       savedSections.push({
         key: section.key,
@@ -101,11 +113,29 @@ export async function importDailyEbsDecks(date = getSeoulDate()) {
       continue;
     }
 
+    if (existingDeck && options.force) {
+      await updateDeckWithCards(existingDeck.id, {
+        deckName,
+        rawText: cardsToText(section.cards),
+        cards: section.cards
+      });
+
+      updatedDecks.push(existingDeck.code);
+      savedSections.push({
+        key: section.key,
+        deckName,
+        cardCount: section.cards.length,
+        code: existingDeck.code,
+        updated: true
+      });
+      continue;
+    }
+
     const code = await createUniqueDeckCode(prefix);
     await insertDeckWithCards({
       code,
       deckName,
-      rawText: section.lines.join("\n"),
+      rawText: cardsToText(section.cards),
       cards: section.cards
     });
 
@@ -124,6 +154,7 @@ export async function importDailyEbsDecks(date = getSeoulDate()) {
     date,
     sourceUrl: post.sourceUrl,
     createdDecks,
+    updatedDecks,
     skippedDecks,
     sections: savedSections
   };
@@ -237,7 +268,7 @@ function extractContentLines(html: string, date: string) {
 
   const datePattern = createDatePattern(date);
   const startIndex = lines.findIndex(
-    (line) => /EBS\s*입트영/.test(line) && datePattern.test(line)
+    (line) => /EBS\s*\uC785\uD2B8\uC601/.test(line) && datePattern.test(line)
   );
   const scopedLines = startIndex >= 0 ? lines.slice(startIndex + 1) : lines;
   const oneMoreIndex = scopedLines.findIndex((line) =>
@@ -249,7 +280,7 @@ function extractContentLines(html: string, date: string) {
     .filter(isUsefulLine);
 }
 
-function buildSections(lines: string[]) {
+async function buildSections(lines: string[]) {
   const keyIndex = lines.findIndex(isKeyExpressionsHeading);
   const patternIndex = lines.findIndex(isPatternHeading);
   const dialogIndex = lines.findIndex((line, index) => {
@@ -272,7 +303,7 @@ function buildSections(lines: string[]) {
       key: "BODY" as const,
       label: sectionLabels.BODY,
       lines: bodyLines,
-      cards: buildBodyCards(bodyLines)
+      cards: await buildBodyCards(bodyLines)
     },
     {
       key: "WORD" as const,
@@ -295,40 +326,91 @@ function buildSections(lines: string[]) {
   ] satisfies EbsSection[];
 }
 
-function buildBodyCards(lines: string[]) {
-  const cards: Card[] = [];
-  const contentLines = lines.filter((line) => !/^EBS\s*입트영/.test(line));
-  const firstEnglishIndex = contentLines.findIndex((line) => !hasHangul(line));
+async function buildBodyCards(lines: string[]) {
+  const sentences = splitBodySentences(lines);
 
-  if (
-    firstEnglishIndex >= 0 &&
-    hasHangul(contentLines[firstEnglishIndex + 1] || "")
-  ) {
-    cards.push({
-      front: contentLines[firstEnglishIndex],
-      back: contentLines[firstEnglishIndex + 1]
-    });
+  if (sentences.length === 0) {
+    throw new Error("BODY section has no English sentences to translate");
   }
 
-  const fallbackBack =
-    cards[0]?.back || contentLines.find((line) => hasHangul(line)) || "본문";
+  const translations = await translateBodySentences(sentences);
 
-  for (const line of contentLines) {
-    if (hasHangul(line) || cards.some((card) => card.front === line)) {
-      continue;
-    }
-
-    if (line.length < 12) {
-      continue;
-    }
-
-    cards.push({
-      front: line,
-      back: fallbackBack
-    });
+  if (translations.length !== sentences.length) {
+    throw new Error(
+      `BODY translation count mismatch: ${sentences.length} sentences, ${translations.length} translations`
+    );
   }
 
-  return dedupeCards(cards);
+  return sentences
+    .map((sentence, index) => ({
+      front: sentence.trim(),
+      back: translations[index].trim()
+    }))
+    .filter((card) => card.front && card.back);
+}
+
+function splitBodySentences(lines: string[]) {
+  return lines
+    .filter((line) => !/^EBS\s*\uC785\uD2B8\uC601/.test(line))
+    .filter((line) => !hasHangul(line))
+    .filter((line) => /[.!?]/.test(line))
+    .flatMap((line) => line.match(/[^.!?]+[.!?]+(?:["')\]]+)?/g) || [])
+    .map((sentence) => sentence.replace(/\s+/g, " ").trim())
+    .filter((sentence) => sentence.length >= 12);
+}
+
+export async function translateBodySentences(sentences: string[]) {
+  if (sentences.length === 0) {
+    return [];
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY || process.env.TRANSLATION_API_KEY;
+
+  if (!apiKey) {
+    throw new Error(
+      "BODY translation requires OPENAI_API_KEY or TRANSLATION_API_KEY"
+    );
+  }
+
+  const model = process.env.OPENAI_TRANSLATION_MODEL || "gpt-4.1";
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model,
+      input: [
+        {
+          role: "developer",
+          content:
+            "Translate English study text into natural Korean for language-learning flashcards. Return only a JSON array of Korean strings. Keep the same number and order as the input sentences. Do not add explanations."
+        },
+        {
+          role: "user",
+          content: JSON.stringify(sentences)
+        }
+      ]
+    })
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      `OpenAI translation failed: ${data?.error?.message || response.status}`
+    );
+  }
+
+  const text = extractResponseText(data);
+  const translations = parseJsonStringArray(text);
+
+  if (translations.some((translation) => !hasHangul(translation))) {
+    throw new Error("BODY translation returned at least one non-Korean line");
+  }
+
+  return translations;
 }
 
 function buildPatternCards(lines: string[]) {
@@ -380,7 +462,7 @@ function buildDialogCards(lines: string[]) {
         return isDialogueLine(line)
           ? {
               front: line,
-              back: "대화문"
+              back: "\uB300\uD654\uBB38"
             }
           : null;
       })
@@ -390,7 +472,7 @@ function buildDialogCards(lines: string[]) {
 
 function parseEnglishKoreanLine(line: string): Card | null {
   const clean = line.replace(/^\d+\.\s*/, "").replace(/^\*\s*/, "").trim();
-  const hangulMatch = clean.match(/[가-힣]/);
+  const hangulMatch = clean.match(/[\uAC00-\uD7A3]/);
 
   if (!hangulMatch || hangulMatch.index === undefined) {
     return null;
@@ -465,17 +547,53 @@ async function insertDeckWithCards(input: {
     throw new Error(`Failed to create EBS deck: ${deckError?.message}`);
   }
 
-  const { error: cardsError } = await supabaseAdmin.from("cards").insert(
-    input.cards.map((card, index) => ({
-      deck_id: deck.id,
+  await insertCards(deck.id, input.cards);
+}
+
+async function updateDeckWithCards(
+  deckId: string | number,
+  input: {
+    deckName: string;
+    rawText: string;
+    cards: Card[];
+  }
+) {
+  const { error: deckError } = await supabaseAdmin
+    .from("decks")
+    .update({
+      name: input.deckName,
+      raw_text: input.rawText
+    })
+    .eq("id", deckId);
+
+  if (deckError) {
+    throw new Error(`Failed to update EBS deck: ${deckError.message}`);
+  }
+
+  const { error: deleteError } = await supabaseAdmin
+    .from("cards")
+    .delete()
+    .eq("deck_id", deckId);
+
+  if (deleteError) {
+    throw new Error(`Failed to replace EBS cards: ${deleteError.message}`);
+  }
+
+  await insertCards(deckId, input.cards);
+}
+
+async function insertCards(deckId: string | number, cards: Card[]) {
+  const { error } = await supabaseAdmin.from("cards").insert(
+    cards.map((card, index) => ({
+      deck_id: deckId,
       front: card.front,
       back: card.back,
       position: index
     }))
   );
 
-  if (cardsError) {
-    throw new Error(`Failed to create EBS cards: ${cardsError.message}`);
+  if (error) {
+    throw new Error(`Failed to create EBS cards: ${error.message}`);
   }
 }
 
@@ -502,7 +620,7 @@ function createTitleMatcher(date: string) {
   const datePattern = createDatePattern(date);
 
   return (title: string) => {
-    return /EBS\s*입트영/.test(title) && datePattern.test(title);
+    return /EBS\s*\uC785\uD2B8\uC601/.test(title) && datePattern.test(title);
   };
 }
 
@@ -518,37 +636,53 @@ function formatCompactDate(date: string) {
   return `${year.slice(2)}${month}${day}`;
 }
 
+function cardsToText(cards: Card[]) {
+  return cards.map((card) => `${card.front}\t${card.back}`).join("\n");
+}
+
+function assertCardsAreComplete(section: EbsSection) {
+  const invalid = section.cards.find((card) => {
+    return !card.front.trim() || !card.back.trim();
+  });
+
+  if (invalid) {
+    throw new Error(`${section.key} contains an incomplete card`);
+  }
+}
+
 function cleanLine(line: string) {
   return line
-    .replace(/^[-•·]\s*/, "")
+    .replace(/^[-\u2022\u00b7]\s*/, "")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 function isUsefulLine(line: string) {
-  if (!line || line === "​") {
+  if (!line || line === "\u200b") {
     return false;
   }
 
   return ![
-    "본문 바로가기",
-    "본문 기타 기능",
-    "공유하기",
-    "URL 복사",
-    "신고하기"
+    "\uBCF8\uBB38 \uBC14\uB85C\uAC00\uAE30",
+    "\uBCF8\uBB38 \uAE30\uD0C0 \uAE30\uB2A5",
+    "\uACF5\uC720\uD558\uAE30",
+    "URL \uBCF5\uC0AC",
+    "\uC2E0\uACE0\uD558\uAE30"
   ].includes(line);
 }
 
 function isKeyExpressionsHeading(line: string) {
-  return /key\s+expressions|주요\s*표현|단어/i.test(line);
+  return /key\s+expressions|\uC8FC\uC694\s*\uD45C\uD604|\uB2E8\uC5B4/i.test(
+    line
+  );
 }
 
 function isPatternHeading(line: string) {
-  return /pattern\s+practice|패턴/i.test(line);
+  return /pattern\s+practice|\uD328\uD134/i.test(line);
 }
 
 function isDialogueLine(line: string) {
-  return /^[AB]\s+/.test(line) || /^[AB]\s*[:：]/.test(line);
+  return /^[AB]\s+/.test(line) || /^[AB]\s*[:\uFF1A]/.test(line);
 }
 
 function positiveOrEnd(index: number, end: number) {
@@ -556,7 +690,7 @@ function positiveOrEnd(index: number, end: number) {
 }
 
 function hasHangul(text: string) {
-  return /[가-힣]/.test(text);
+  return /[\uAC00-\uD7A3]/.test(text);
 }
 
 function dedupeCards(cards: Card[]) {
@@ -583,6 +717,56 @@ function decodeHtml(value: string) {
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">");
+}
+
+function extractResponseText(data: unknown) {
+  const maybeOutputText = (data as { output_text?: unknown }).output_text;
+
+  if (typeof maybeOutputText === "string") {
+    return maybeOutputText;
+  }
+
+  const output = (data as { output?: unknown }).output;
+
+  if (!Array.isArray(output)) {
+    throw new Error("OpenAI response did not include output text");
+  }
+
+  for (const item of output) {
+    const content = (item as { content?: unknown }).content;
+
+    if (!Array.isArray(content)) {
+      continue;
+    }
+
+    for (const part of content) {
+      const text = (part as { text?: unknown }).text;
+
+      if (typeof text === "string") {
+        return text;
+      }
+    }
+  }
+
+  throw new Error("OpenAI response did not include output text");
+}
+
+function parseJsonStringArray(value: string) {
+  const trimmed = value
+    .trim()
+    .replace(/^```(?:json)?/i, "")
+    .replace(/```$/i, "")
+    .trim();
+  const parsed = JSON.parse(trimmed);
+
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every((item) => typeof item === "string")
+  ) {
+    throw new Error("OpenAI translation response was not a JSON string array");
+  }
+
+  return parsed;
 }
 
 function randomCode(length: number) {

@@ -1,12 +1,17 @@
-const endpoint =
+const force = process.argv.includes("--force");
+const baseEndpoint =
   process.env.IMPORT_EBS_URL ||
   "http://127.0.0.1:3000/api/import-daily-ebs";
+const endpoint = force
+  ? `${baseEndpoint}${baseEndpoint.includes("?") ? "&" : "?"}force=1`
+  : baseEndpoint;
 
 const response = await fetch(endpoint, {
   method: "POST",
   headers: {
     "Content-Type": "application/json"
-  }
+  },
+  body: JSON.stringify({ force })
 });
 
 const text = await response.text();

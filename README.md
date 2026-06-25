@@ -9,10 +9,10 @@ A small Next.js App Router app for sharing flashcard decks with short codes.
 - `POST /api/decks` accepts `{ "code": "...", "deckName": "...", "rawText": "..." }`
 - `GET /api/decks/[code]` returns `{ "code": "...", "deckName": "...", "cards": [...] }`
 - `GET /api/decks/recent?days=7` returns all decks uploaded within the last N days
-- `GET` or `POST /api/import-daily-ebs` imports today's EBS 입트영 decks automatically
+- `GET` or `POST /api/import-daily-ebs` imports today's EBS Ipteuyeong decks automatically
 - Supabase-only storage for Vercel serverless deployment
 
-## Run locally
+## Run Locally
 
 ```bash
 npm install
@@ -33,15 +33,18 @@ Useful production endpoints:
 
 ```text
 https://smart-leitner-share.vercel.app/api/import-daily-ebs
+https://smart-leitner-share.vercel.app/api/import-daily-ebs?force=1
 https://smart-leitner-share.vercel.app/api/decks/recent?days=7
 https://smart-leitner-share.vercel.app/api/decks/DECK_CODE
 ```
 
-## Supabase setup
+## Supabase Setup
 
 1. Run `supabase/schema.sql` in your Supabase SQL editor.
 2. Copy `.env.example` to `.env.local`.
 3. Fill in `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
+4. For daily EBS BODY translation, also set `OPENAI_API_KEY`.
+5. Optionally set `OPENAI_TRANSLATION_MODEL`; the default is `gpt-4.1`.
 
 Deck data is always saved to Supabase. The app does not use local filesystem
 storage for decks.
@@ -52,14 +55,14 @@ Deck Code as the display name.
 
 ## Daily EBS Import
 
-The importer fetches the Naver Blog 입트영 category, finds the post whose title
-matches today's Asia/Seoul lesson date, excludes everything after `One More
-Dialog`, and saves these sections as separate Smart Leitner decks:
+The importer fetches the Naver Blog EBS Ipteuyeong category, finds the post
+whose title matches today's Asia/Seoul lesson date, excludes everything after
+`One More Dialog`, and saves these sections as separate Smart Leitner decks:
 
-- `BODY`: 본문
-- `WORD`: 단어 / Key Expressions
-- `PATT`: 패턴 / Pattern Practice
-- `DIAL`: 대화문
+- `BODY`: main passage
+- `WORD`: vocabulary / Key Expressions
+- `PATT`: Pattern Practice
+- `DIAL`: dialogue
 
 Deck codes use this shape:
 
@@ -71,7 +74,20 @@ IT260625-DIAL-P2H6
 ```
 
 If a deck with the same date and section prefix already exists, the importer
-skips that section instead of creating a duplicate.
+skips that section instead of creating a duplicate. Use `force=1` to replace
+existing section decks for that date.
+
+The BODY deck is post-processed differently from the other sections. The
+importer splits the English passage into sentences, translates each sentence
+into natural Korean with OpenAI, and stores every BODY card as:
+
+```text
+English sentence<TAB>Korean translation
+```
+
+The importer refuses to save BODY if translation fails, if the translation
+count does not match the English sentence count, or if a card would have an
+empty front or back.
 
 Manual run against a local dev server:
 
@@ -80,10 +96,16 @@ npm run dev
 npm run import:ebs
 ```
 
-To run against a deployed site:
+Regenerate existing decks for the same date and section prefixes:
 
 ```bash
-set IMPORT_EBS_URL=https://your-site.vercel.app/api/import-daily-ebs
+npm run import:ebs -- --force
+```
+
+Run against a deployed site:
+
+```bash
+set IMPORT_EBS_URL=https://smart-leitner-share.vercel.app/api/import-daily-ebs
 npm run import:ebs
 ```
 
