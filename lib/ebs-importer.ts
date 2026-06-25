@@ -330,23 +330,32 @@ async function buildBodyCards(lines: string[]) {
   const sentences = splitBodySentences(lines);
 
   if (sentences.length === 0) {
-    throw new Error("BODY section has no English sentences to translate");
+    throw new Error("BODY section has no English sentences");
   }
 
-  const translations = await translateBodySentences(sentences);
+  if (shouldTranslateBody()) {
+    const translations = await translateBodySentences(sentences);
 
-  if (translations.length !== sentences.length) {
-    throw new Error(
-      `BODY translation count mismatch: ${sentences.length} sentences, ${translations.length} translations`
-    );
+    if (translations.length !== sentences.length) {
+      throw new Error(
+        `BODY translation count mismatch: ${sentences.length} sentences, ${translations.length} translations`
+      );
+    }
+
+    return sentences
+      .map((sentence, index) => ({
+        front: sentence.trim(),
+        back: translations[index].trim()
+      }))
+      .filter((card) => card.front && card.back);
   }
 
   return sentences
-    .map((sentence, index) => ({
+    .map((sentence) => ({
       front: sentence.trim(),
-      back: translations[index].trim()
+      back: getUntranslatedBodyBack(sentence)
     }))
-    .filter((card) => card.front && card.back);
+    .filter((card) => card.front && card.back !== undefined);
 }
 
 function splitBodySentences(lines: string[]) {
@@ -642,12 +651,29 @@ function cardsToText(cards: Card[]) {
 
 function assertCardsAreComplete(section: EbsSection) {
   const invalid = section.cards.find((card) => {
-    return !card.front.trim() || !card.back.trim();
+    const allowEmptyBodyBack =
+      section.key === "BODY" &&
+      !shouldTranslateBody() &&
+      getBodyBackMode() === "empty";
+
+    return !card.front.trim() || (!allowEmptyBodyBack && !card.back.trim());
   });
 
   if (invalid) {
     throw new Error(`${section.key} contains an incomplete card`);
   }
+}
+
+function shouldTranslateBody() {
+  return /^(1|true|yes)$/i.test(process.env.TRANSLATE_BODY || "false");
+}
+
+function getBodyBackMode() {
+  return process.env.BODY_BACK_MODE === "empty" ? "empty" : "same";
+}
+
+function getUntranslatedBodyBack(sentence: string) {
+  return getBodyBackMode() === "empty" ? "" : sentence.trim();
 }
 
 function cleanLine(line: string) {

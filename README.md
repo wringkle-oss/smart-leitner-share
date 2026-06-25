@@ -43,8 +43,10 @@ https://smart-leitner-share.vercel.app/api/decks/DECK_CODE
 1. Run `supabase/schema.sql` in your Supabase SQL editor.
 2. Copy `.env.example` to `.env.local`.
 3. Fill in `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
-4. For daily EBS BODY translation, also set `OPENAI_API_KEY`.
-5. Optionally set `OPENAI_TRANSLATION_MODEL`; the default is `gpt-4.1`.
+4. BODY translation is off by default. The default BODY behavior is
+   `TRANSLATE_BODY=false` and `BODY_BACK_MODE=same`.
+5. If you explicitly set `TRANSLATE_BODY=true`, also set `OPENAI_API_KEY`.
+6. Optionally set `OPENAI_TRANSLATION_MODEL`; the default is `gpt-4.1`.
 
 Deck data is always saved to Supabase. The app does not use local filesystem
 storage for decks.
@@ -78,16 +80,31 @@ skips that section instead of creating a duplicate. Use `force=1` to replace
 existing section decks for that date.
 
 The BODY deck is post-processed differently from the other sections. The
-importer splits the English passage into sentences, translates each sentence
-into natural Korean with OpenAI, and stores every BODY card as:
+importer splits the English passage into sentences. By default, translation is
+off, so every BODY card is stored as:
+
+```text
+English sentence<TAB>English sentence
+```
+
+This default is intentionally redundant, but it keeps both front and back
+filled so card importers do not drop BODY cards. You can set
+`BODY_BACK_MODE=empty` to store `English sentence<TAB>` instead.
+
+Optional translation mode:
+
+```text
+TRANSLATE_BODY=true
+OPENAI_API_KEY=...
+```
+
+When translation is enabled, BODY is stored as:
 
 ```text
 English sentence<TAB>Korean translation
 ```
 
-The importer refuses to save BODY if translation fails, if the translation
-count does not match the English sentence count, or if a card would have an
-empty front or back.
+If translation fails, the importer refuses to save an incomplete BODY deck.
 
 Manual run against a local dev server:
 
@@ -100,6 +117,12 @@ Regenerate existing decks for the same date and section prefixes:
 
 ```bash
 npm run import:ebs -- --force
+```
+
+The deployed force URL is useful after changing BODY settings:
+
+```text
+https://smart-leitner-share.vercel.app/api/import-daily-ebs?force=1
 ```
 
 Run against a deployed site:
