@@ -21,6 +21,22 @@ npm run dev
 
 Open `http://localhost:3000`.
 
+## Production
+
+Production URL:
+
+```text
+https://smart-leitner-share.vercel.app/
+```
+
+Useful production endpoints:
+
+```text
+https://smart-leitner-share.vercel.app/api/import-daily-ebs
+https://smart-leitner-share.vercel.app/api/decks/recent?days=7
+https://smart-leitner-share.vercel.app/api/decks/DECK_CODE
+```
+
 ## Supabase setup
 
 1. Run `supabase/schema.sql` in your Supabase SQL editor.
