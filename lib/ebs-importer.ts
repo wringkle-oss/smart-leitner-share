@@ -309,7 +309,11 @@ async function buildSections(lines: string[]) {
       key: "WORD" as const,
       label: sectionLabels.WORD,
       lines: wordLines,
-      cards: wordLines.map(parseEnglishKoreanLine).filter(Boolean) as Card[]
+      cards: normalizeWordPatternCards(
+        wordLines
+          .map(parseEnglishKoreanLine)
+          .filter((card): card is Card => !!card)
+      )
     },
     {
       key: "PATT" as const,
@@ -445,7 +449,101 @@ function buildPatternCards(lines: string[]) {
     }
   }
 
-  return dedupeCards(cards);
+  return normalizeWordPatternCards(cards);
+}
+
+function normalizeWordPatternCards(cards: Card[]) {
+  return dedupeCards(
+    cards
+      .map(normalizeWordPatternCard)
+      .filter((card) => card.front.trim() && card.back.trim())
+  );
+}
+
+function normalizeWordPatternCard(card: Card): Card {
+  const front = normalizeWordPatternFront(card.front);
+  const back = normalizeWordPatternBack(front, card.back);
+
+  return {
+    front,
+    back
+  };
+}
+
+function normalizeWordPatternFront(value: string) {
+  return value
+    .replace(/\s+/g, " ")
+    .replace(/\brun a 10K\s+10km\b/i, "run a 10K")
+    .replace(/\b10K\s+10km\b/i, "10K")
+    .replace(/\s*\([^)]*$/g, "")
+    .trim();
+}
+
+function normalizeWordPatternBack(front: string, value: string) {
+  let back = value.replace(/\s+/g, " ").trim();
+  const normalizedFront = front.toLowerCase();
+
+  if (/^run a 10k$/.test(normalizedFront) && !/10\s*km|10k/i.test(back)) {
+    back = back.startsWith("\uACBD\uC8FC")
+      ? `10km ${back}`
+      : `10km \uACBD\uC8FC\uC5D0 ${back.replace(/^\uC5D0\s*/, "")}`;
+  }
+
+  if (/^make it a habit to\s*~$/.test(normalizedFront) && !back.includes("~")) {
+    return "~\uD558\uB294 \uAC83\uC744 \uC2B5\uAD00\uD654\uD558\uB2E4";
+  }
+
+  if (/^make it a goal to\s*~$/.test(normalizedFront) && !back.includes("~")) {
+    return "~\uD558\uB294 \uAC83\uC744 \uBAA9\uD45C\uB85C \uC0BC\uB2E4";
+  }
+
+  if (/^keep someone busy$/.test(normalizedFront) && !back.includes("~")) {
+    return normalizeRequiredObjectBack(back, "~\uC744/\uB97C ");
+  }
+
+  if (/^see an ad for\s*~$/.test(normalizedFront) && !back.includes("~")) {
+    return back.startsWith("\uC5D0 \uB300\uD55C")
+      ? `~${back}`
+      : `~\uC5D0 \uB300\uD55C ${back}`;
+  }
+
+  if (front.includes("~") && !back.includes("~")) {
+    back = normalizeTildeBack(back);
+  }
+
+  return back;
+}
+
+function normalizeTildeBack(back: string) {
+  if (/^[\uC744\uB97C]\s*/.test(back)) {
+    return `~${back}`;
+  }
+
+  if (/^\uC5D0\s*/.test(back)) {
+    return `~${back}`;
+  }
+
+  if (/^\uCE58\uACE0\s*/.test(back)) {
+    return `~${back}`;
+  }
+
+  if (/^\uC2E0\uCCAD\uD558\uB2E4/.test(back)) {
+    return `~\uC744 ${back}`;
+  }
+
+  if (/^\uB4F1\uB85D\uD558\uB2E4/.test(back)) {
+    return `~\uC5D0 ${back}`;
+  }
+
+  return back;
+}
+
+function normalizeRequiredObjectBack(back: string, placeholder: string) {
+  if (/^[\uC744\uB97C]\s*/.test(back)) {
+    return `${placeholder}${back.replace(/^[\uC744\uB97C]\s*/, "")}`;
+  }
+
+  return `${placeholder}${back}`;
 }
 
 function buildDialogCards(lines: string[]) {

@@ -66,6 +66,11 @@ whose title matches today's Asia/Seoul lesson date, excludes everything after
 - `PATT`: Pattern Practice
 - `DIAL`: dialogue
 
+WORD and PATT cards are normalized before saving. The importer keeps required
+placeholder markers in Korean meanings, such as `sign up for ~<TAB>~을 신청하다`
+and `not bad for ~<TAB>~치고 나쁘지 않은`, and cleans known duplicate fronts
+such as `run a 10K 10km` into `run a 10K`.
+
 Deck codes use this shape:
 
 ```text
