@@ -9,7 +9,7 @@ A small Next.js App Router app for sharing flashcard decks with short codes.
 - `POST /api/decks` accepts `{ "code": "...", "deckName": "...", "rawText": "..." }`
 - `GET /api/decks/[code]` returns `{ "code": "...", "deckName": "...", "cards": [...] }`
 - `GET /api/decks/recent?days=7` returns all decks uploaded within the last N days
-- `GET` or `POST /api/import-daily-ebs` imports today's EBS Ipteuyeong decks automatically
+- `GET` or `POST /api/import-daily-ebs` imports daily EBS decks automatically
 - Supabase-only storage for Vercel serverless deployment
 
 ## Run Locally
@@ -32,8 +32,10 @@ https://smart-leitner-share.vercel.app/
 Useful production endpoints:
 
 ```text
-https://smart-leitner-share.vercel.app/api/import-daily-ebs
-https://smart-leitner-share.vercel.app/api/import-daily-ebs?force=1
+https://smart-leitner-share.vercel.app/api/import-daily-ebs?program=ipte
+https://smart-leitner-share.vercel.app/api/import-daily-ebs?program=gwite&force=1
+https://smart-leitner-share.vercel.app/api/import-daily-ebs?program=start&force=1
+https://smart-leitner-share.vercel.app/api/import-daily-ebs?program=all
 https://smart-leitner-share.vercel.app/api/decks/recent?days=7
 https://smart-leitner-share.vercel.app/api/decks/DECK_CODE
 ```
@@ -57,44 +59,48 @@ Deck Code as the display name.
 
 ## Daily EBS Import
 
-The importer fetches the Naver Blog EBS Ipteuyeong category, finds the post
-whose title matches today's Asia/Seoul lesson date, excludes everything after
-`One More Dialog`, and saves these sections as separate Smart Leitner decks:
+The importer fetches the Naver Blog `alone36`, finds the post whose title
+matches today's Asia/Seoul lesson date, excludes everything after
+`One More Dialog`, and saves each parsed section as a separate Smart Leitner
+deck.
 
-- `BODY`: main passage
-- `WORD`: vocabulary / Key Expressions
-- `PATT`: Pattern Practice
-- `DIAL`: dialogue
+Supported programs:
 
-WORD and PATT cards are normalized before saving. The importer keeps required
-placeholder markers in Korean meanings, such as `sign up for ~<TAB>~을 신청하다`
-and `not bad for ~<TAB>~치고 나쁘지 않은`, and cleans known duplicate fronts
-such as `run a 10K 10km` into `run a 10K`.
+- `ipte`: Ipteuyeong. Decks: `BODY`, `WORD`, `PATT`, `DIAL`
+- `gwite`: Gwiyeong. Decks: `SCRIPT`, `WORD`, `EXPR`, `CLOZE`
+- `start`: Start English. Decks: `DIAL`, `WORD`, `PATT`, `PRACTICE`
+- `all`: imports all supported programs and reports each program separately
 
-Deck codes use this shape:
+Deck codes use these shapes:
 
 ```text
-IT260625-BODY-A7K3
-IT260625-WORD-M9Q2
-IT260625-PATT-R4X8
-IT260625-DIAL-P2H6
+IT260707-BODY-A7K3
+GTE260707-SCRIPT-M9Q2
+SE260707-DIAL-R4X8
 ```
 
-If a deck with the same date and section prefix already exists, the importer
-skips that section instead of creating a duplicate. Use `force=1` to replace
-existing section decks for that date.
+If a deck with the same date, program, and section prefix already exists, the
+importer skips that section instead of creating a duplicate. Use `force=1` to
+delete and reinsert cards for existing section decks.
 
-The BODY deck is post-processed differently from the other sections. The
-importer splits the English passage into sentences. By default, translation is
-off, so every BODY card is stored as:
+Card rules:
+
+- If a source line has English and Korean, it is saved as `front<TAB>back`.
+- If a listening/script/body line has English only, it is saved as
+  `English sentence<TAB>English sentence` by default.
+- Korean-only lines are skipped when they cannot be safely paired.
+- WORD/PATT/EXPR/PRACTICE cards are normalized before saving. The importer
+  keeps required `~` placeholders in meanings and cleans known duplicate fronts
+  such as `run a 10K 10km` into `run a 10K`.
+- CLOZE cards are optional. If the importer cannot safely build them, the rest
+  of the program import still succeeds.
+
+BODY translation is off by default:
 
 ```text
-English sentence<TAB>English sentence
+TRANSLATE_BODY=false
+BODY_BACK_MODE=same
 ```
-
-This default is intentionally redundant, but it keeps both front and back
-filled so card importers do not drop BODY cards. You can set
-`BODY_BACK_MODE=empty` to store `English sentence<TAB>` instead.
 
 Optional translation mode:
 
@@ -103,45 +109,46 @@ TRANSLATE_BODY=true
 OPENAI_API_KEY=...
 ```
 
-When translation is enabled, BODY is stored as:
-
-```text
-English sentence<TAB>Korean translation
-```
-
-If translation fails, the importer refuses to save an incomplete BODY deck.
+When translation is enabled, BODY is stored as
+`English sentence<TAB>Korean translation`. If translation fails, the importer
+refuses to save an incomplete BODY deck.
 
 Manual run against a local dev server:
 
 ```bash
 npm run dev
-npm run import:ebs
-```
-
-Regenerate existing decks for the same date and section prefixes:
-
-```bash
-npm run import:ebs -- --force
-```
-
-The deployed force URL is useful after changing BODY settings:
-
-```text
-https://smart-leitner-share.vercel.app/api/import-daily-ebs?force=1
+npm run import:ebs -- --program=ipte
+npm run import:ebs -- --program=gwite
+npm run import:ebs -- --program=start
+npm run import:ebs -- --program=all
+npm run import:ebs -- --program=gwite --force
 ```
 
 Run against a deployed site:
 
 ```bash
 set IMPORT_EBS_URL=https://smart-leitner-share.vercel.app/api/import-daily-ebs
-npm run import:ebs
+npm run import:ebs -- --program=all
+```
+
+Category discovery:
+
+The importer tries to discover the matching Naver Blog category from
+`https://m.blog.naver.com/alone36?tab=1`. If discovery fails, set category
+numbers manually:
+
+```text
+NAVER_BLOG_ID=alone36
+EBS_IPTE_CATEGORY_NO=68
+EBS_GWITE_CATEGORY_NO=
+EBS_START_CATEGORY_NO=
 ```
 
 Vercel Cron is configured in `vercel.json`:
 
 ```json
 {
-  "path": "/api/import-daily-ebs",
+  "path": "/api/import-daily-ebs?program=all",
   "schedule": "0 20 * * 0-5"
 }
 ```

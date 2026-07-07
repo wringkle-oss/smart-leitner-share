@@ -5,7 +5,18 @@ type Card = {
   back: string;
 };
 
-type SectionKey = "BODY" | "WORD" | "PATT" | "DIAL";
+type ProgramId = "ipte" | "gwite" | "start";
+export type ProgramSelector = ProgramId | "all";
+
+type SectionKey =
+  | "BODY"
+  | "WORD"
+  | "PATT"
+  | "DIAL"
+  | "SCRIPT"
+  | "EXPR"
+  | "CLOZE"
+  | "PRACTICE";
 
 type EbsSection = {
   key: SectionKey;
@@ -37,13 +48,29 @@ type DeckRecord = {
   name: string;
 };
 
+type EbsProgram = {
+  id: ProgramId;
+  programName: string;
+  deckPrefix: string;
+  categoryEnvKey: string;
+  defaultCategoryNo?: number;
+  categoryHints: RegExp[];
+  titlePatterns: RegExp[];
+  sectionLabels: Record<string, string>;
+  buildSections(lines: string[]): Promise<EbsSection[]>;
+};
+
 export type ImportDailyEbsResult = {
   ok: boolean;
+  status: "ok" | "not_found" | "error";
   date: string;
+  program: ProgramId;
+  programName: string;
   sourceUrl: string | null;
   createdDecks: string[];
   updatedDecks: string[];
   skippedDecks: string[];
+  warnings: string[];
   sections: Array<{
     key: SectionKey;
     deckName: string;
@@ -52,19 +79,84 @@ export type ImportDailyEbsResult = {
     skipped?: boolean;
     updated?: boolean;
   }>;
+  error?: string;
 };
 
-const BLOG_ID = "alone36";
-const CATEGORY_NO = 68;
-const CATEGORY_URL =
-  "https://m.blog.naver.com/PostList.naver?blogId=alone36&categoryNo=68";
+export type ImportAllEbsResult = {
+  ok: boolean;
+  date: string;
+  program: "all";
+  results: ImportDailyEbsResult[];
+};
+
+const DEFAULT_BLOG_ID = "alone36";
 const MOBILE_BASE_URL = "https://m.blog.naver.com";
 
-const sectionLabels: Record<SectionKey, string> = {
+const ipteLabels: Record<string, string> = {
   BODY: "\uBCF8\uBB38",
   WORD: "\uB2E8\uC5B4",
   PATT: "\uD328\uD134",
   DIAL: "\uB300\uD654\uBB38"
+};
+
+const gwiteLabels: Record<string, string> = {
+  SCRIPT: "\uC2A4\uD06C\uB9BD\uD2B8",
+  WORD: "\uB2E8\uC5B4",
+  EXPR: "\uD45C\uD604",
+  CLOZE: "\uBE48\uCE78"
+};
+
+const startLabels: Record<string, string> = {
+  DIAL: "\uB300\uD654\uBB38",
+  WORD: "\uB2E8\uC5B4",
+  PATT: "\uD328\uD134",
+  PRACTICE: "\uC5F0\uC2B5"
+};
+
+const EBS_PROGRAMS: Record<ProgramId, EbsProgram> = {
+  ipte: {
+    id: "ipte",
+    programName: "\uC785\uD2B8\uC601",
+    deckPrefix: "IT",
+    categoryEnvKey: "EBS_IPTE_CATEGORY_NO",
+    defaultCategoryNo: 68,
+    categoryHints: [
+      /\uC785\uD2B8\uC601/i,
+      /\uC785\uC774\s*\uD2B8\uC774\uB294\s*\uC601\uC5B4/i
+    ],
+    titlePatterns: [
+      /EBS\s*\uC785\uD2B8\uC601/i,
+      /\uC785\uC774\s*\uD2B8\uC774\uB294\s*\uC601\uC5B4/i
+    ],
+    sectionLabels: ipteLabels,
+    buildSections: buildIpteSections
+  },
+  gwite: {
+    id: "gwite",
+    programName: "\uADC0\uD2B8\uC601",
+    deckPrefix: "GTE",
+    categoryEnvKey: "EBS_GWITE_CATEGORY_NO",
+    categoryHints: [
+      /\uADC0\uD2B8\uC601/i,
+      /\uADC0\uAC00\s*\uD2B8\uC774\uB294\s*\uC601\uC5B4/i
+    ],
+    titlePatterns: [
+      /EBS\s*\uADC0\uD2B8\uC601/i,
+      /\uADC0\uAC00\s*\uD2B8\uC774\uB294\s*\uC601\uC5B4/i
+    ],
+    sectionLabels: gwiteLabels,
+    buildSections: buildGwiteSections
+  },
+  start: {
+    id: "start",
+    programName: "Start English",
+    deckPrefix: "SE",
+    categoryEnvKey: "EBS_START_CATEGORY_NO",
+    categoryHints: [/start\s*english/i, /\uC2A4\uD0C0\uD2B8\s*\uC789\uAE00\uB9AC\uC2DC/i],
+    titlePatterns: [/EBS\s*start\s*english/i, /start\s*english/i, /\uC2A4\uD0C0\uD2B8\s*\uC789\uAE00\uB9AC\uC2DC/i],
+    sectionLabels: startLabels,
+    buildSections: buildStartSections
+  }
 };
 
 const userAgent =
@@ -73,32 +165,121 @@ const userAgent =
 
 export async function importDailyEbsDecks(
   date = getSeoulDate(),
-  options: ImportOptions = {}
+  options: ImportOptions & { program?: ProgramId } = {}
 ): Promise<ImportDailyEbsResult> {
-  const post = await findPostForDate(date);
+  const program = EBS_PROGRAMS[options.program || "ipte"];
+
+  return importDailyEbsProgram(program, date, options);
+}
+
+export async function importDailyEbsPrograms(
+  date = getSeoulDate(),
+  selector: ProgramSelector = "ipte",
+  options: ImportOptions = {}
+): Promise<ImportDailyEbsResult | ImportAllEbsResult> {
+  if (selector !== "all") {
+    return importDailyEbsDecks(date, {
+      ...options,
+      program: selector
+    });
+  }
+
+  const results: ImportDailyEbsResult[] = [];
+
+  for (const program of Object.values(EBS_PROGRAMS)) {
+    try {
+      results.push(await importDailyEbsProgram(program, date, options));
+    } catch (error) {
+      console.error("Daily EBS program import failed:", {
+        program: program.id,
+        error
+      });
+      results.push(createErrorResult(program, date, error));
+    }
+  }
+
+  return {
+    ok: results.some((result) => result.status === "ok"),
+    date,
+    program: "all",
+    results
+  };
+}
+
+export function normalizeProgramSelector(value: unknown): ProgramSelector {
+  const raw = String(value || "ipte").trim().toLowerCase();
+
+  if (raw === "all" || raw === "gwite" || raw === "start" || raw === "ipte") {
+    return raw;
+  }
+
+  if (raw === "gte" || raw === "\uADC0\uD2B8\uC601") {
+    return "gwite";
+  }
+
+  if (raw === "se" || raw === "startenglish") {
+    return "start";
+  }
+
+  return "ipte";
+}
+
+async function importDailyEbsProgram(
+  program: EbsProgram,
+  date: string,
+  options: ImportOptions
+): Promise<ImportDailyEbsResult> {
+  const post = await findPostForDate(program, date);
+  const warnings: string[] = [];
 
   if (!post) {
-    throw new Error(`No EBS post found for ${date}`);
+    return {
+      ok: false,
+      status: "not_found",
+      date,
+      program: program.id,
+      programName: program.programName,
+      sourceUrl: null,
+      createdDecks: [],
+      updatedDecks: [],
+      skippedDecks: [],
+      warnings: [`No ${program.programName} post found for ${date}`],
+      sections: []
+    };
   }
 
   const html = await fetchText(post.sourceUrl);
-  const lines = extractContentLines(html, date);
-  const sections = await buildSections(lines);
+  const lines = extractContentLines(program, html, date);
+  const sections = await program.buildSections(lines);
   const createdDecks: string[] = [];
   const updatedDecks: string[] = [];
   const skippedDecks: string[] = [];
   const savedSections: ImportDailyEbsResult["sections"] = [];
 
+  console.log("Parsed EBS sections:", {
+    program: program.id,
+    date,
+    sourceUrl: post.sourceUrl,
+    sections: sections.map((section) => ({
+      key: section.key,
+      lines: section.lines.length,
+      cards: section.cards.length
+    }))
+  });
+
   for (const section of sections) {
     if (section.cards.length === 0) {
-      console.log("Skipping empty EBS section:", section.key);
+      console.log("Skipping empty EBS section:", {
+        program: program.id,
+        section: section.key
+      });
       continue;
     }
 
     assertCardsAreComplete(section);
 
-    const deckName = `\uC785\uD2B8\uC601 ${date} ${section.label}`;
-    const prefix = `IT${formatCompactDate(date)}-${section.key}-`;
+    const deckName = `${program.programName} ${date} ${section.label}`;
+    const prefix = `${program.deckPrefix}${formatCompactDate(date)}-${section.key}-`;
     const existingDeck = await findExistingDeckByPrefix(prefix);
 
     if (existingDeck && !options.force) {
@@ -151,12 +332,37 @@ export async function importDailyEbsDecks(
 
   return {
     ok: true,
+    status: "ok",
     date,
+    program: program.id,
+    programName: program.programName,
     sourceUrl: post.sourceUrl,
     createdDecks,
     updatedDecks,
     skippedDecks,
+    warnings,
     sections: savedSections
+  };
+}
+
+function createErrorResult(
+  program: EbsProgram,
+  date: string,
+  error: unknown
+): ImportDailyEbsResult {
+  return {
+    ok: false,
+    status: "error",
+    date,
+    program: program.id,
+    programName: program.programName,
+    sourceUrl: null,
+    createdDecks: [],
+    updatedDecks: [],
+    skippedDecks: [],
+    warnings: [],
+    sections: [],
+    error: error instanceof Error ? error.message : String(error)
   };
 }
 
@@ -174,9 +380,12 @@ export function getSeoulDate(now = new Date()) {
   return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
-async function findPostForDate(date: string): Promise<FoundPost | null> {
-  const titleMatcher = createTitleMatcher(date);
-  const candidates = await fetchPostListCandidates();
+async function findPostForDate(
+  program: EbsProgram,
+  date: string
+): Promise<FoundPost | null> {
+  const titleMatcher = createTitleMatcher(program, date);
+  const candidates = await fetchPostListCandidates(program);
 
   for (const item of candidates) {
     const title = decodeHtml(
@@ -196,57 +405,135 @@ async function findPostForDate(date: string): Promise<FoundPost | null> {
     return {
       logNo,
       title,
-      sourceUrl: `${MOBILE_BASE_URL}/PostView.naver?blogId=${BLOG_ID}&logNo=${logNo}`
+      sourceUrl: `${MOBILE_BASE_URL}/PostView.naver?blogId=${getBlogId()}&logNo=${logNo}`
     };
   }
 
   return null;
 }
 
-async function fetchPostListCandidates() {
+async function fetchPostListCandidates(program: EbsProgram) {
   const candidates: NaverPostListItem[] = [];
   const seenLogNos = new Set<string>();
+  const categoryNos = await resolveCategoryNos(program);
 
-  for (let page = 1; page <= 5; page += 1) {
-    const apiUrl = `${MOBILE_BASE_URL}/api/blogs/${BLOG_ID}/category/${CATEGORY_NO}/post?itemCount=50&page=${page}`;
+  for (const categoryNo of categoryNos) {
+    for (let page = 1; page <= 5; page += 1) {
+      const apiUrl = `${MOBILE_BASE_URL}/api/blogs/${getBlogId()}/category/${categoryNo}/post?itemCount=50&page=${page}`;
 
-    try {
-      const data = JSON.parse(await fetchText(apiUrl));
-      const items = data?.result?.items || data?.result?.postList || [];
+      try {
+        const data = JSON.parse(await fetchText(apiUrl));
+        const items = data?.result?.items || data?.result?.postList || [];
 
-      for (const item of items) {
-        const logNo = String(item?.logNo || "").trim();
-
-        if (logNo && !seenLogNos.has(logNo)) {
-          seenLogNos.add(logNo);
-          candidates.push(item);
+        for (const item of items) {
+          addCandidate(candidates, seenLogNos, item);
         }
+      } catch (error) {
+        console.error("Naver post list API failed:", {
+          program: program.id,
+          categoryNo,
+          page,
+          error
+        });
       }
-    } catch (error) {
-      console.error("Naver post list API failed:", { page, error });
     }
   }
 
-  if (candidates.length > 0) {
-    return candidates;
-  }
+  const fallbackCandidates = await fetchRootPostCandidates(program);
 
-  const html = await fetchText(CATEGORY_URL);
-  const matches = html.matchAll(
-    /PostView\.naver\?blogId=alone36&amp;logNo=(\d+)[\s\S]{0,500}?title[^>]*>([^<]+)/g
-  );
-
-  for (const match of matches) {
-    candidates.push({
-      logNo: match[1],
-      title: decodeHtml(match[2])
-    });
+  for (const item of fallbackCandidates) {
+    addCandidate(candidates, seenLogNos, item);
   }
 
   return candidates;
 }
 
-function extractContentLines(html: string, date: string) {
+function addCandidate(
+  candidates: NaverPostListItem[],
+  seenLogNos: Set<string>,
+  item: NaverPostListItem
+) {
+  const logNo = String(item?.logNo || "").trim();
+
+  if (logNo && !seenLogNos.has(logNo)) {
+    seenLogNos.add(logNo);
+    candidates.push(item);
+  }
+}
+
+async function resolveCategoryNos(program: EbsProgram) {
+  const configured = Number(process.env[program.categoryEnvKey] || "");
+
+  if (Number.isFinite(configured) && configured > 0) {
+    return [configured];
+  }
+
+  const discovered = await discoverCategoryNos(program);
+
+  if (discovered.length > 0) {
+    return discovered;
+  }
+
+  return program.defaultCategoryNo ? [program.defaultCategoryNo] : [];
+}
+
+async function discoverCategoryNos(program: EbsProgram) {
+  try {
+    const html = await fetchText(getBlogHomeUrl());
+    const decoded = decodeHtml(html);
+    const matches = decoded.matchAll(/categoryNo[=:"']+(\d+)/g);
+    const categoryNos = new Set<number>();
+
+    for (const match of matches) {
+      const index = match.index ?? 0;
+      const snippet = decoded.slice(Math.max(0, index - 250), index + 250);
+
+      if (program.categoryHints.some((hint) => hint.test(snippet))) {
+        categoryNos.add(Number(match[1]));
+      }
+    }
+
+    return Array.from(categoryNos);
+  } catch (error) {
+    console.error("Naver category discovery failed:", {
+      program: program.id,
+      error
+    });
+    return [];
+  }
+}
+
+async function fetchRootPostCandidates(program: EbsProgram) {
+  try {
+    const html = await fetchText(getBlogHomeUrl());
+    const decoded = decodeHtml(html);
+    const candidates: NaverPostListItem[] = [];
+    const matches = decoded.matchAll(
+      /PostView\.naver\?blogId=[^&"']+(?:&|&amp;)logNo=(\d+)[\s\S]{0,800}?(?:title[^>]*>|ell2[^>]*>|strong[^>]*>)([^<]+)/g
+    );
+
+    for (const match of matches) {
+      const title = cleanLine(match[2]);
+
+      if (program.titlePatterns.some((pattern) => pattern.test(title))) {
+        candidates.push({
+          logNo: match[1],
+          title
+        });
+      }
+    }
+
+    return candidates;
+  } catch (error) {
+    console.error("Naver root post fallback failed:", {
+      program: program.id,
+      error
+    });
+    return [];
+  }
+}
+
+function extractContentLines(program: EbsProgram, html: string, date: string) {
   const withoutScript = html
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<style[\s\S]*?<\/style>/gi, "");
@@ -266,10 +553,8 @@ function extractContentLines(html: string, date: string) {
     .map((line) => line.trim())
     .filter(Boolean);
 
-  const datePattern = createDatePattern(date);
-  const startIndex = lines.findIndex(
-    (line) => /EBS\s*\uC785\uD2B8\uC601/.test(line) && datePattern.test(line)
-  );
+  const titleMatcher = createTitleMatcher(program, date);
+  const startIndex = lines.findIndex(titleMatcher);
   const scopedLines = startIndex >= 0 ? lines.slice(startIndex + 1) : lines;
   const oneMoreIndex = scopedLines.findIndex((line) =>
     /one\s+more\s+dialog/i.test(line)
@@ -280,7 +565,7 @@ function extractContentLines(html: string, date: string) {
     .filter(isUsefulLine);
 }
 
-async function buildSections(lines: string[]) {
+async function buildIpteSections(lines: string[]) {
   const keyIndex = lines.findIndex(isKeyExpressionsHeading);
   const patternIndex = lines.findIndex(isPatternHeading);
   const dialogIndex = lines.findIndex((line, index) => {
@@ -301,37 +586,127 @@ async function buildSections(lines: string[]) {
   return [
     {
       key: "BODY" as const,
-      label: sectionLabels.BODY,
+      label: ipteLabels.BODY,
       lines: bodyLines,
       cards: await buildBodyCards(bodyLines)
     },
     {
       key: "WORD" as const,
-      label: sectionLabels.WORD,
+      label: ipteLabels.WORD,
       lines: wordLines,
-      cards: normalizeWordPatternCards(
-        wordLines
-          .map(parseEnglishKoreanLine)
-          .filter((card): card is Card => !!card)
-      )
+      cards: buildTermCards(wordLines)
     },
     {
       key: "PATT" as const,
-      label: sectionLabels.PATT,
+      label: ipteLabels.PATT,
       lines: patternLines,
       cards: buildPatternCards(patternLines)
     },
     {
       key: "DIAL" as const,
-      label: sectionLabels.DIAL,
+      label: ipteLabels.DIAL,
       lines: dialogLines,
       cards: buildDialogCards(dialogLines)
     }
   ] satisfies EbsSection[];
 }
 
+async function buildGwiteSections(lines: string[]) {
+  const scriptIndex = lines.findIndex(isScriptHeading);
+  const wordIndex = lines.findIndex(isWordHeading);
+  const exprIndex = lines.findIndex((line, index) => {
+    return index > positiveOrEnd(wordIndex, 0) && isExpressionHeading(line);
+  });
+  const firstHeading = firstPositiveOrEnd(
+    [wordIndex, exprIndex].filter((index) => index !== scriptIndex),
+    lines.length
+  );
+  const scriptStart = scriptIndex >= 0 ? scriptIndex + 1 : 0;
+  const scriptLines = lines.slice(scriptStart, firstHeading);
+  const wordLines = wordIndex >= 0
+    ? lines.slice(wordIndex + 1, positiveOrEnd(exprIndex, lines.length))
+    : [];
+  const exprLines = exprIndex >= 0 ? lines.slice(exprIndex + 1) : [];
+  const scriptCards = buildSentenceCards(scriptLines);
+  const exprCards = buildTermCards(exprLines);
+
+  return [
+    {
+      key: "SCRIPT" as const,
+      label: gwiteLabels.SCRIPT,
+      lines: scriptLines,
+      cards: scriptCards
+    },
+    {
+      key: "WORD" as const,
+      label: gwiteLabels.WORD,
+      lines: wordLines,
+      cards: buildTermCards(wordLines)
+    },
+    {
+      key: "EXPR" as const,
+      label: gwiteLabels.EXPR,
+      lines: exprLines,
+      cards: exprCards
+    },
+    {
+      key: "CLOZE" as const,
+      label: gwiteLabels.CLOZE,
+      lines: scriptLines,
+      cards: buildClozeCards(scriptCards, exprCards)
+    }
+  ] satisfies EbsSection[];
+}
+
+async function buildStartSections(lines: string[]) {
+  const wordIndex = lines.findIndex(isWordHeading);
+  const patternIndex = lines.findIndex(isPatternHeading);
+  const practiceIndex = lines.findIndex(isPracticeHeading);
+  const firstHeading = firstPositiveOrEnd(
+    [wordIndex, patternIndex, practiceIndex],
+    lines.length
+  );
+  const dialogLines = lines.slice(0, firstHeading);
+  const wordLines = wordIndex >= 0
+    ? lines.slice(wordIndex + 1, firstPositiveOrEnd([patternIndex, practiceIndex], lines.length))
+    : [];
+  const patternLines = patternIndex >= 0
+    ? lines.slice(patternIndex + 1, positiveOrEnd(practiceIndex, lines.length))
+    : [];
+  const practiceLines = practiceIndex >= 0 ? lines.slice(practiceIndex + 1) : [];
+  const patternCards = buildPatternCards(patternLines);
+  const practiceCards = buildPracticeCards(practiceLines, patternCards);
+
+  return [
+    {
+      key: "DIAL" as const,
+      label: startLabels.DIAL,
+      lines: dialogLines,
+      cards: buildStartDialogCards(dialogLines)
+    },
+    {
+      key: "WORD" as const,
+      label: startLabels.WORD,
+      lines: wordLines,
+      cards: buildTermCards(wordLines)
+    },
+    {
+      key: "PATT" as const,
+      label: startLabels.PATT,
+      lines: patternLines,
+      cards: patternCards
+    },
+    {
+      key: "PRACTICE" as const,
+      label: startLabels.PRACTICE,
+      lines: practiceLines,
+      cards: practiceCards
+    }
+  ] satisfies EbsSection[];
+}
+
 async function buildBodyCards(lines: string[]) {
-  const sentences = splitBodySentences(lines);
+  const sentences = splitEnglishSentences(lines);
 
   if (sentences.length === 0) {
     throw new Error("BODY section has no English sentences");
@@ -362,14 +737,23 @@ async function buildBodyCards(lines: string[]) {
     .filter((card) => card.front && card.back !== undefined);
 }
 
-function splitBodySentences(lines: string[]) {
+function splitEnglishSentences(lines: string[]) {
   return lines
-    .filter((line) => !/^EBS\s*\uC785\uD2B8\uC601/.test(line))
+    .filter((line) => !/^EBS\s*/.test(line))
     .filter((line) => !hasHangul(line))
     .filter((line) => /[.!?]/.test(line))
     .flatMap((line) => line.match(/[^.!?]+[.!?]+(?:["')\]]+)?/g) || [])
     .map((sentence) => sentence.replace(/\s+/g, " ").trim())
-    .filter((sentence) => sentence.length >= 12);
+    .filter((sentence) => sentence.length >= 8);
+}
+
+function buildSentenceCards(lines: string[]) {
+  return dedupeCards(
+    splitEnglishSentences(lines).map((sentence) => ({
+      front: sentence,
+      back: getUntranslatedBodyBack(sentence)
+    }))
+  );
 }
 
 export async function translateBodySentences(sentences: string[]) {
@@ -426,6 +810,14 @@ export async function translateBodySentences(sentences: string[]) {
   return translations;
 }
 
+function buildTermCards(lines: string[]) {
+  return normalizeCards(
+    lines
+      .map(parseEnglishKoreanLine)
+      .filter((card): card is Card => !!card)
+  );
+}
+
 function buildPatternCards(lines: string[]) {
   const cards: Card[] = [];
 
@@ -449,20 +841,122 @@ function buildPatternCards(lines: string[]) {
     }
   }
 
-  return normalizeWordPatternCards(cards);
+  return normalizeCards(cards);
 }
 
-function normalizeWordPatternCards(cards: Card[]) {
+function buildDialogCards(lines: string[]) {
+  const english = lines.filter((line) => isDialogueLine(line) && !hasHangul(line));
+  const korean = lines.filter((line) => isDialogueLine(line) && hasHangul(line));
+
+  if (english.length > 0 && english.length === korean.length) {
+    return dedupeCards(
+      english.map((line, index) => ({
+        front: line,
+        back: korean[index]
+      }))
+    );
+  }
+
+  return dedupeCards(
+    lines
+      .map((line) => {
+        const parsed = parseEnglishKoreanLine(line);
+
+        if (parsed) {
+          return parsed;
+        }
+
+        return isDialogueLine(line)
+          ? {
+              front: line,
+              back: hasHangul(line) ? "\uB300\uD654\uBB38" : line
+            }
+          : null;
+      })
+      .filter((card): card is Card => !!card && !!card.front && !!card.back)
+  );
+}
+
+function buildStartDialogCards(lines: string[]) {
+  const dialogCards = buildDialogCards(lines);
+
+  if (dialogCards.length > 0) {
+    return dialogCards;
+  }
+
+  return buildSentenceCards(lines);
+}
+
+function buildPracticeCards(lines: string[], patternCards: Card[]) {
+  const directCards = normalizeCards(
+    lines
+      .map(parseEnglishKoreanLine)
+      .filter((card): card is Card => !!card)
+  );
+
+  if (directCards.length > 0) {
+    return directCards;
+  }
+
+  return patternCards
+    .filter((card) => card.front.length <= 90)
+    .slice(0, 8)
+    .map((card) => ({
+      front: card.front,
+      back: card.back
+    }));
+}
+
+function buildClozeCards(scriptCards: Card[], expressionCards: Card[]) {
+  const cards: Card[] = [];
+
+  for (const expression of expressionCards) {
+    const target = normalizeClozeTarget(expression.front);
+
+    if (!target || target.length < 4) {
+      continue;
+    }
+
+    const script = scriptCards.find((card) =>
+      card.front.toLowerCase().includes(target.toLowerCase())
+    );
+
+    if (!script) {
+      continue;
+    }
+
+    cards.push({
+      front: script.front.replace(new RegExp(escapeRegExp(target), "i"), "____"),
+      back: script.front
+    });
+
+    if (cards.length >= 10) {
+      break;
+    }
+  }
+
+  return dedupeCards(cards);
+}
+
+function normalizeClozeTarget(value: string) {
+  return value
+    .replace(/~/g, "")
+    .replace(/\([^)]*\)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeCards(cards: Card[]) {
   return dedupeCards(
     cards
-      .map(normalizeWordPatternCard)
+      .map(normalizeCard)
       .filter((card) => card.front.trim() && card.back.trim())
   );
 }
 
-function normalizeWordPatternCard(card: Card): Card {
-  const front = normalizeWordPatternFront(card.front);
-  const back = normalizeWordPatternBack(front, card.back);
+function normalizeCard(card: Card): Card {
+  const front = normalizeFront(card.front);
+  const back = normalizeBack(front, card.back);
 
   return {
     front,
@@ -470,7 +964,7 @@ function normalizeWordPatternCard(card: Card): Card {
   };
 }
 
-function normalizeWordPatternFront(value: string) {
+function normalizeFront(value: string) {
   return value
     .replace(/\s+/g, " ")
     .replace(/\brun a 10K\s+10km\b/i, "run a 10K")
@@ -479,7 +973,7 @@ function normalizeWordPatternFront(value: string) {
     .trim();
 }
 
-function normalizeWordPatternBack(front: string, value: string) {
+function normalizeBack(front: string, value: string) {
   let back = value.replace(/\s+/g, " ").trim();
   const normalizedFront = front.toLowerCase();
 
@@ -499,6 +993,18 @@ function normalizeWordPatternBack(front: string, value: string) {
 
   if (/^keep someone busy$/.test(normalizedFront) && !back.includes("~")) {
     return normalizeRequiredObjectBack(back, "~\uC744/\uB97C ");
+  }
+
+  if (/^be related to\s*~$/.test(normalizedFront) && !back.includes("~")) {
+    return back.startsWith("\uC640") || back.startsWith("\uACFC")
+      ? `~${back}`
+      : `~\uC640 ${back}`;
+  }
+
+  if (/^be likely to\s*~$/.test(normalizedFront) && !back.includes("~")) {
+    return back.startsWith("\uD560")
+      ? `~${back}`
+      : `~\uD560 \uAC00\uB2A5\uC131\uC774 \uC788\uB2E4`;
   }
 
   if (/^see an ad for\s*~$/.test(normalizedFront) && !back.includes("~")) {
@@ -523,7 +1029,15 @@ function normalizeTildeBack(back: string) {
     return `~${back}`;
   }
 
+  if (/^\uC640|\uACFC\s*/.test(back)) {
+    return `~${back}`;
+  }
+
   if (/^\uCE58\uACE0\s*/.test(back)) {
+    return `~${back}`;
+  }
+
+  if (/^\uD560\s+\uAC00\uB2A5\uC131/.test(back)) {
     return `~${back}`;
   }
 
@@ -546,37 +1060,6 @@ function normalizeRequiredObjectBack(back: string, placeholder: string) {
   return `${placeholder}${back}`;
 }
 
-function buildDialogCards(lines: string[]) {
-  const english = lines.filter((line) => isDialogueLine(line) && !hasHangul(line));
-  const korean = lines.filter((line) => isDialogueLine(line) && hasHangul(line));
-
-  if (english.length > 0 && english.length === korean.length) {
-    return english.map((line, index) => ({
-      front: line,
-      back: korean[index]
-    }));
-  }
-
-  return dedupeCards(
-    lines
-      .map((line) => {
-        const parsed = parseEnglishKoreanLine(line);
-
-        if (parsed) {
-          return parsed;
-        }
-
-        return isDialogueLine(line)
-          ? {
-              front: line,
-              back: "\uB300\uD654\uBB38"
-            }
-          : null;
-      })
-      .filter(Boolean) as Card[]
-  );
-}
-
 function parseEnglishKoreanLine(line: string): Card | null {
   const clean = line.replace(/^\d+\.\s*/, "").replace(/^\*\s*/, "").trim();
   const hangulMatch = clean.match(/[\uAC00-\uD7A3]/);
@@ -588,7 +1071,7 @@ function parseEnglishKoreanLine(line: string): Card | null {
   const front = clean.slice(0, hangulMatch.index).trim();
   const back = clean.slice(hangulMatch.index).trim();
 
-  if (!front || !back) {
+  if (!front || !back || !/[A-Za-z~]/.test(front)) {
     return null;
   }
 
@@ -709,7 +1192,7 @@ async function fetchText(url: string) {
     headers: {
       "User-Agent": userAgent,
       Accept: "text/html,application/json;q=0.9,*/*;q=0.8",
-      Referer: CATEGORY_URL
+      Referer: getBlogHomeUrl()
     },
     next: {
       revalidate: 0
@@ -723,18 +1206,21 @@ async function fetchText(url: string) {
   return response.text();
 }
 
-function createTitleMatcher(date: string) {
+function createTitleMatcher(program: EbsProgram, date: string) {
   const datePattern = createDatePattern(date);
 
   return (title: string) => {
-    return /EBS\s*\uC785\uD2B8\uC601/.test(title) && datePattern.test(title);
+    return (
+      program.titlePatterns.some((pattern) => pattern.test(title)) &&
+      datePattern.test(title)
+    );
   };
 }
 
 function createDatePattern(date: string) {
   const [year, month, day] = date.split("-").map(Number);
 
-  return new RegExp(`${year}\\s*[.]\\s*0?${month}\\s*[.]\\s*0?${day}`);
+  return new RegExp(`${year}\\s*[.-]\\s*0?${month}\\s*[.-]\\s*0?${day}`);
 }
 
 function formatCompactDate(date: string) {
@@ -795,14 +1281,34 @@ function isUsefulLine(line: string) {
   ].includes(line);
 }
 
+function isScriptHeading(line: string) {
+  return /script|listening|\uC2A4\uD06C\uB9BD\uD2B8|\uB4E3\uAE30|\uC9C0\uBB38/i.test(line);
+}
+
 function isKeyExpressionsHeading(line: string) {
   return /key\s+expressions|\uC8FC\uC694\s*\uD45C\uD604|\uB2E8\uC5B4/i.test(
     line
   );
 }
 
+function isWordHeading(line: string) {
+  return /key\s+expressions|vocab|vocabulary|words?|\uC8FC\uC694\s*\uD45C\uD604|\uB2E8\uC5B4|\uC5B4\uD718/i.test(
+    line
+  );
+}
+
+function isExpressionHeading(line: string) {
+  return /expressions?|phrases?|\uD45C\uD604|\uC720\uC6A9\uD55C\s*\uD45C\uD604|\uAD6C\uBB38|\uC219\uC5B4/i.test(
+    line
+  );
+}
+
 function isPatternHeading(line: string) {
-  return /pattern\s+practice|\uD328\uD134/i.test(line);
+  return /pattern\s+practice|patterns?|\uD328\uD134|\uBB38\uD615/i.test(line);
+}
+
+function isPracticeHeading(line: string) {
+  return /practice|exercise|\uC5F0\uC2B5|\uC751\uC6A9/i.test(line);
 }
 
 function isDialogueLine(line: string) {
@@ -811,6 +1317,12 @@ function isDialogueLine(line: string) {
 
 function positiveOrEnd(index: number, end: number) {
   return index >= 0 ? index : end;
+}
+
+function firstPositiveOrEnd(indices: number[], end: number) {
+  const positives = indices.filter((index) => index >= 0);
+
+  return positives.length > 0 ? Math.min(...positives) : end;
 }
 
 function hasHangul(text: string) {
@@ -900,4 +1412,16 @@ function randomCode(length: number) {
     { length },
     () => chars[Math.floor(Math.random() * chars.length)]
   ).join("");
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getBlogId() {
+  return process.env.NAVER_BLOG_ID || DEFAULT_BLOG_ID;
+}
+
+function getBlogHomeUrl() {
+  return `${MOBILE_BASE_URL}/${getBlogId()}?tab=1`;
 }
