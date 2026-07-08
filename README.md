@@ -36,6 +36,7 @@ https://smart-leitner-share.vercel.app/api/import-daily-ebs?program=ipte
 https://smart-leitner-share.vercel.app/api/import-daily-ebs?program=gwite&force=1
 https://smart-leitner-share.vercel.app/api/import-daily-ebs?program=start&force=1
 https://smart-leitner-share.vercel.app/api/import-daily-ebs?program=all
+https://smart-leitner-share.vercel.app/api/import-daily-ebs-all
 https://smart-leitner-share.vercel.app/api/decks/recent?days=7
 https://smart-leitner-share.vercel.app/api/decks/DECK_CODE
 ```
@@ -70,6 +71,9 @@ Supported programs:
 - `gwite`: Gwiyeong. Decks: `SCRIPT`, `WORD`, `EXPR`, `CLOZE`
 - `start`: Start English. Decks: `DIAL`, `WORD`, `PATT`, `PRACTICE`
 - `all`: imports all supported programs and reports each program separately
+
+`GET /api/import-daily-ebs` defaults to `program=all`. Use `program=ipte`
+when you only want the Ipteuyeong importer.
 
 Deck codes use these shapes:
 
@@ -148,7 +152,7 @@ Vercel Cron is configured in `vercel.json`:
 
 ```json
 {
-  "path": "/api/import-daily-ebs?program=all",
+  "path": "/api/import-daily-ebs-all",
   "schedule": "0 20 * * 0-5"
 }
 ```

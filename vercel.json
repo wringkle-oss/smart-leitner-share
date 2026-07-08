@@ -1,7 +1,7 @@
 {
   "crons": [
     {
-      "path": "/api/import-daily-ebs?program=all",
+      "path": "/api/import-daily-ebs-all",
       "schedule": "0 20 * * 0-5"
     }
   ]

@@ -42,6 +42,18 @@ type FoundPost = {
   sourceUrl: string;
 };
 
+type ImportDebug = {
+  program: ProgramId;
+  searchedCategoryNo: number[];
+  categorySource: "env" | "discovered" | "default" | "none";
+  candidateTitlePatterns: string[];
+  foundPostTitles: string[];
+  matchedPostTitle: string | null;
+  sourceUrl: string | null;
+  parsedSectionNames: SectionKey[];
+  deckCardCounts: Record<string, number>;
+};
+
 type DeckRecord = {
   id: string | number;
   code: string;
@@ -62,7 +74,7 @@ type EbsProgram = {
 
 export type ImportDailyEbsResult = {
   ok: boolean;
-  status: "ok" | "not_found" | "error";
+  status: "created" | "updated" | "skipped" | "not_found" | "failed";
   date: string;
   program: ProgramId;
   programName: string;
@@ -79,6 +91,7 @@ export type ImportDailyEbsResult = {
     skipped?: boolean;
     updated?: boolean;
   }>;
+  debug: ImportDebug;
   error?: string;
 };
 
@@ -199,15 +212,23 @@ export async function importDailyEbsPrograms(
   }
 
   return {
-    ok: results.some((result) => result.status === "ok"),
+    ok: results.some(
+      (result) =>
+        result.status === "created" ||
+        result.status === "updated" ||
+        result.status === "skipped"
+    ),
     date,
     program: "all",
     results
   };
 }
 
-export function normalizeProgramSelector(value: unknown): ProgramSelector {
-  const raw = String(value || "ipte").trim().toLowerCase();
+export function normalizeProgramSelector(
+  value: unknown,
+  fallback: ProgramSelector = "all"
+): ProgramSelector {
+  const raw = String(value || fallback).trim().toLowerCase();
 
   if (raw === "all" || raw === "gwite" || raw === "start" || raw === "ipte") {
     return raw;
@@ -229,7 +250,7 @@ async function importDailyEbsProgram(
   date: string,
   options: ImportOptions
 ): Promise<ImportDailyEbsResult> {
-  const post = await findPostForDate(program, date);
+  const { post, debug } = await findPostForDate(program, date);
   const warnings: string[] = [];
 
   if (!post) {
@@ -244,7 +265,8 @@ async function importDailyEbsProgram(
       updatedDecks: [],
       skippedDecks: [],
       warnings: [`No ${program.programName} post found for ${date}`],
-      sections: []
+      sections: [],
+      debug
     };
   }
 
@@ -267,8 +289,16 @@ async function importDailyEbsProgram(
     }))
   });
 
+  debug.sourceUrl = post.sourceUrl;
+  debug.matchedPostTitle = post.title;
+  debug.parsedSectionNames = sections.map((section) => section.key);
+  debug.deckCardCounts = Object.fromEntries(
+    sections.map((section) => [section.key, section.cards.length])
+  );
+
   for (const section of sections) {
     if (section.cards.length === 0) {
+      warnings.push(`${section.key} section parsed 0 cards, deck not created`);
       console.log("Skipping empty EBS section:", {
         program: program.id,
         section: section.key
@@ -332,7 +362,7 @@ async function importDailyEbsProgram(
 
   return {
     ok: true,
-    status: "ok",
+    status: getResultStatus(createdDecks, updatedDecks, skippedDecks),
     date,
     program: program.id,
     programName: program.programName,
@@ -341,7 +371,8 @@ async function importDailyEbsProgram(
     updatedDecks,
     skippedDecks,
     warnings,
-    sections: savedSections
+    sections: savedSections,
+    debug
   };
 }
 
@@ -352,7 +383,7 @@ function createErrorResult(
 ): ImportDailyEbsResult {
   return {
     ok: false,
-    status: "error",
+    status: "failed",
     date,
     program: program.id,
     programName: program.programName,
@@ -362,7 +393,44 @@ function createErrorResult(
     skippedDecks: [],
     warnings: [],
     sections: [],
+    debug: createEmptyDebug(program),
     error: error instanceof Error ? error.message : String(error)
+  };
+}
+
+function getResultStatus(
+  createdDecks: string[],
+  updatedDecks: string[],
+  skippedDecks: string[]
+): ImportDailyEbsResult["status"] {
+  if (createdDecks.length > 0) {
+    return "created";
+  }
+
+  if (updatedDecks.length > 0) {
+    return "updated";
+  }
+
+  if (skippedDecks.length > 0) {
+    return "skipped";
+  }
+
+  return "failed";
+}
+
+function createEmptyDebug(program: EbsProgram): ImportDebug {
+  return {
+    program: program.id,
+    searchedCategoryNo: [],
+    categorySource: "none",
+    candidateTitlePatterns: program.titlePatterns.map((pattern) =>
+      pattern.toString()
+    ),
+    foundPostTitles: [],
+    matchedPostTitle: null,
+    sourceUrl: null,
+    parsedSectionNames: [],
+    deckCardCounts: {}
   };
 }
 
@@ -383,11 +451,23 @@ export function getSeoulDate(now = new Date()) {
 async function findPostForDate(
   program: EbsProgram,
   date: string
-): Promise<FoundPost | null> {
+): Promise<{ post: FoundPost | null; debug: ImportDebug }> {
   const titleMatcher = createTitleMatcher(program, date);
-  const candidates = await fetchPostListCandidates(program);
+  const search = await fetchPostListCandidates(program);
+  const debug = createEmptyDebug(program);
 
-  for (const item of candidates) {
+  debug.searchedCategoryNo = search.searchedCategoryNos;
+  debug.categorySource = search.categorySource;
+  debug.foundPostTitles = search.candidates
+    .map((item) =>
+      decodeHtml(
+        item.titleWithInspectMessage || item.title || item.encodedTitle || ""
+      )
+    )
+    .filter(Boolean)
+    .slice(0, 30);
+
+  for (const item of search.candidates) {
     const title = decodeHtml(
       item.titleWithInspectMessage || item.title || item.encodedTitle || ""
     );
@@ -403,19 +483,26 @@ async function findPostForDate(
     }
 
     return {
-      logNo,
-      title,
-      sourceUrl: `${MOBILE_BASE_URL}/PostView.naver?blogId=${getBlogId()}&logNo=${logNo}`
+      post: {
+        logNo,
+        title,
+        sourceUrl: `${MOBILE_BASE_URL}/PostView.naver?blogId=${getBlogId()}&logNo=${logNo}`
+      },
+      debug: {
+        ...debug,
+        matchedPostTitle: title,
+        sourceUrl: `${MOBILE_BASE_URL}/PostView.naver?blogId=${getBlogId()}&logNo=${logNo}`
+      }
     };
   }
 
-  return null;
+  return { post: null, debug };
 }
 
 async function fetchPostListCandidates(program: EbsProgram) {
   const candidates: NaverPostListItem[] = [];
   const seenLogNos = new Set<string>();
-  const categoryNos = await resolveCategoryNos(program);
+  const { categoryNos, categorySource } = await resolveCategoryNos(program);
 
   for (const categoryNo of categoryNos) {
     for (let page = 1; page <= 5; page += 1) {
@@ -445,7 +532,11 @@ async function fetchPostListCandidates(program: EbsProgram) {
     addCandidate(candidates, seenLogNos, item);
   }
 
-  return candidates;
+  return {
+    candidates,
+    searchedCategoryNos: categoryNos,
+    categorySource
+  };
 }
 
 function addCandidate(
@@ -465,16 +556,30 @@ async function resolveCategoryNos(program: EbsProgram) {
   const configured = Number(process.env[program.categoryEnvKey] || "");
 
   if (Number.isFinite(configured) && configured > 0) {
-    return [configured];
+    return {
+      categoryNos: [configured],
+      categorySource: "env" as const
+    };
   }
 
   const discovered = await discoverCategoryNos(program);
 
   if (discovered.length > 0) {
-    return discovered;
+    return {
+      categoryNos: discovered,
+      categorySource: "discovered" as const
+    };
   }
 
-  return program.defaultCategoryNo ? [program.defaultCategoryNo] : [];
+  return program.defaultCategoryNo
+    ? {
+        categoryNos: [program.defaultCategoryNo],
+        categorySource: "default" as const
+      }
+    : {
+        categoryNos: [],
+        categorySource: "none" as const
+      };
 }
 
 async function discoverCategoryNos(program: EbsProgram) {

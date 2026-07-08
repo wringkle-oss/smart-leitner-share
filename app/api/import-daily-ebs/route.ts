@@ -40,7 +40,7 @@ async function runImport(options: {
       force: options.force
     });
     const status =
-      "status" in result && result.status === "error" ? 500 : 200;
+      "status" in result && result.status === "failed" ? 500 : 200;
 
     return NextResponse.json(result, { status });
   } catch (error) {

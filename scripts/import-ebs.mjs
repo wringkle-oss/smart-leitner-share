@@ -1,5 +1,5 @@
 const force = process.argv.includes("--force");
-const program = getArgValue("--program") || "ipte";
+const program = getArgValue("--program") || "all";
 const baseEndpoint =
   process.env.IMPORT_EBS_URL ||
   "http://127.0.0.1:3000/api/import-daily-ebs";
