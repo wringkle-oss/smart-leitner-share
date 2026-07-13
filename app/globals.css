@@ -37,6 +37,7 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -339,6 +340,13 @@ button.secondary:hover {
   justify-content: space-between;
 }
 
+.deck-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 .deck-summary span {
   color: var(--muted);
   display: block;
@@ -462,16 +470,16 @@ button.study-card.selected {
   text-transform: uppercase;
 }
 
-.study-card strong {
+.study-card-text {
   align-self: center;
-  font-size: clamp(1.1rem, 3vw, 1.55rem);
   line-height: 1.35;
   overflow-wrap: anywhere;
+  text-align: center;
+  white-space: pre-wrap;
 }
 
-.card-board.single .study-card strong {
-  font-size: clamp(1.4rem, 5vw, 2.4rem);
-  text-align: center;
+.card-board.single .study-card-text {
+  line-height: 1.4;
 }
 
 .empty-level {
@@ -505,6 +513,103 @@ button.unknown-button:hover:not(:disabled) {
 button.known-button {
   background: var(--accent);
   border-color: var(--accent);
+}
+
+.settings-overlay {
+  align-items: center;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 16px;
+  position: fixed;
+  z-index: 1000;
+}
+
+.settings-panel {
+  background: #ffffff;
+  border: 1px solid #8d8d8d;
+  border-radius: 16px;
+  max-height: 88vh;
+  overflow-y: auto;
+  padding: 20px;
+  width: min(720px, 100%);
+}
+
+.settings-header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.settings-header h2,
+.settings-section h3 {
+  margin: 0;
+}
+
+.settings-section {
+  background: #f8fbff;
+  border: 1px solid #d0d0d0;
+  border-radius: 12px;
+  margin-top: 18px;
+  padding: 14px;
+}
+
+.setting-row,
+.check-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.setting-row span {
+  font-weight: 700;
+  min-width: 140px;
+}
+
+.setting-row input[type="range"] {
+  flex: 1 1 190px;
+  padding: 0;
+}
+
+.setting-row select {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  min-height: 42px;
+  padding: 0 12px;
+}
+
+.check-row input {
+  accent-color: var(--accent);
+  height: 18px;
+  padding: 0;
+  width: 18px;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.button-row button {
+  background: #ffffff;
+  border-color: var(--line);
+  color: var(--ink);
+  min-height: 40px;
+}
+
+.button-row button.active,
+button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
 }
 
 @media (max-width: 560px) {
@@ -555,9 +660,14 @@ button.known-button {
     flex-direction: column;
   }
 
+  .deck-actions {
+    justify-content: stretch;
+  }
+
   .nav-button,
   .study-load-row button,
-  .deck-summary button {
+  .deck-summary button,
+  .deck-actions button {
     width: 100%;
   }
 
@@ -583,5 +693,14 @@ button.known-button {
     left: 10px;
     position: sticky;
     right: 10px;
+  }
+
+  .settings-overlay {
+    align-items: stretch;
+    padding: 8px;
+  }
+
+  .settings-panel {
+    max-height: calc(100vh - 16px);
   }
 }
