@@ -93,6 +93,14 @@ export default function Home() {
             Create a unique Deck Code, add an optional display name, and paste
             two-column flashcard text for the Android app to download.
           </p>
+          <div className="home-nav" aria-label="Primary actions">
+            <a className="nav-button active" href="/">
+              Upload Deck
+            </a>
+            <a className="nav-button" href="/study">
+              Study Deck
+            </a>
+          </div>
         </div>
 
         <form className="deck-form" onSubmit={handleSubmit}>
