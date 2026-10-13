@@ -847,6 +847,7 @@ function splitEnglishSentences(lines: string[]) {
   // and strip inline Korean annotations (e.g. "입트영") instead of dropping lines.
   const englishText = lines
     .filter((line) => !/^EBS\s*/.test(line))
+    .filter((line) => !isHeadingLine(line))
     .filter(isEnglishLine)
     .map(stripHangulInserts)
     .filter(Boolean)
@@ -858,6 +859,16 @@ function splitEnglishSentences(lines: string[]) {
   return sentences
     .map((sentence) => sentence.replace(/\s+/g, " ").trim())
     .filter((sentence) => sentence.length >= 8 && /[A-Za-z]{2,}/.test(sentence));
+}
+
+// Page headings and IDs (e.g. "alone36", "Getting into “입트영”", "#tag") must not
+// be joined with neighbouring body sentences.
+function isHeadingLine(line: string) {
+  return (
+    /^[A-Za-z]+\d+$/.test(line) ||
+    /^getting\s+into\b/i.test(line) ||
+    /^#/.test(line)
+  );
 }
 
 // A line is "English" when Latin letters clearly dominate. Korean translation
@@ -1012,11 +1023,15 @@ function buildPatternCards(lines: string[]) {
 function buildDialogCards(rawLines: string[]) {
   // Strip inline Korean annotations from English dialogue lines so they are not
   // misclassified as Korean translations (which would break the pairing).
-  const lines = rawLines.map((line) =>
-    isDialogueLine(line) && isEnglishLine(line) ? stripHangulInserts(line) : line
-  );
-  const english = lines.filter((line) => isDialogueLine(line) && !hasHangul(line));
-  const korean = lines.filter((line) => isDialogueLine(line) && hasHangul(line));
+  // Classify by script dominance, not by presence of Hangul: English lines may
+  // still contain program names such as 입트영 (kept on purpose).
+  const lines = rawLines
+    .filter((line) => !isHeadingLine(line))
+    .map((line) =>
+      isDialogueLine(line) && isEnglishLine(line) ? stripHangulInserts(line) : line
+    );
+  const english = lines.filter((line) => isDialogueLine(line) && isEnglishLine(line));
+  const korean = lines.filter((line) => isDialogueLine(line) && !isEnglishLine(line));
 
   if (english.length > 0 && english.length === korean.length) {
     return dedupeCards(
