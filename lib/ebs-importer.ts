@@ -843,13 +843,66 @@ async function buildBodyCards(lines: string[]) {
 }
 
 function splitEnglishSentences(lines: string[]) {
-  return lines
+  // Join English lines first so a sentence split across lines is kept whole,
+  // and strip inline Korean annotations (e.g. "입트영") instead of dropping lines.
+  const englishText = lines
     .filter((line) => !/^EBS\s*/.test(line))
-    .filter((line) => !hasHangul(line))
-    .filter((line) => /[.!?]/.test(line))
-    .flatMap((line) => line.match(/[^.!?]+[.!?]+(?:["')\]]+)?/g) || [])
+    .filter(isEnglishLine)
+    .map(stripHangulInserts)
+    .filter(Boolean)
+    .join(" ");
+
+  const sentences =
+    englishText.match(/[^.!?]+[.!?]+(?:["')\]]+)?|[^.!?]+$/g) || [];
+
+  return sentences
     .map((sentence) => sentence.replace(/\s+/g, " ").trim())
-    .filter((sentence) => sentence.length >= 8);
+    .filter((sentence) => sentence.length >= 8 && /[A-Za-z]{2,}/.test(sentence));
+}
+
+// A line is "English" when Latin letters clearly dominate. Korean translation
+// lines have few Latin letters; English lines may contain inline Korean notes.
+function isEnglishLine(line: string) {
+  const latin = (line.match(/[A-Za-z]/g) || []).length;
+  const hangul = (line.match(/[가-힣]/g) || []).length;
+
+  return latin >= 4 && latin * 2 >= hangul;
+}
+
+// Removes Korean inserted into an English line, keeping the English text.
+function stripHangulInserts(text: string) {
+  const withoutHangul = text.replace(/[가-힣ㄱ-ㆎ]+/g, " ");
+  const withoutEmptyBrackets = withoutHangul.replace(/\(\s*\)|\[\s*\]/g, " ");
+
+  return removeUnmatchedBrackets(withoutEmptyBrackets)
+    .replace(/\s+/g, " ")
+    .replace(/\s+([.,!?;:])/g, "$1")
+    .trim();
+}
+
+function removeUnmatchedBrackets(text: string) {
+  const chars = Array.from(text);
+  const stack: number[] = [];
+  const drop = new Set<number>();
+  const openFor: Record<string, string> = { ")": "(", "]": "[" };
+
+  chars.forEach((char, index) => {
+    if (char === "(" || char === "[") {
+      stack.push(index);
+    } else if (char === ")" || char === "]") {
+      const top = stack[stack.length - 1];
+
+      if (top !== undefined && chars[top] === openFor[char]) {
+        stack.pop();
+      } else {
+        drop.add(index);
+      }
+    }
+  });
+
+  stack.forEach((index) => drop.add(index));
+
+  return chars.filter((_, index) => !drop.has(index)).join("");
 }
 
 function buildSentenceCards(lines: string[]) {
@@ -949,7 +1002,12 @@ function buildPatternCards(lines: string[]) {
   return normalizeCards(cards);
 }
 
-function buildDialogCards(lines: string[]) {
+function buildDialogCards(rawLines: string[]) {
+  // Strip inline Korean annotations from English dialogue lines so they are not
+  // misclassified as Korean translations (which would break the pairing).
+  const lines = rawLines.map((line) =>
+    isDialogueLine(line) && isEnglishLine(line) ? stripHangulInserts(line) : line
+  );
   const english = lines.filter((line) => isDialogueLine(line) && !hasHangul(line));
   const korean = lines.filter((line) => isDialogueLine(line) && hasHangul(line));
 
