@@ -853,7 +853,7 @@ function splitEnglishSentences(lines: string[]) {
     .join(" ");
 
   const sentences =
-    englishText.match(/[^.!?]+[.!?]+(?:["')\]]+)?|[^.!?]+$/g) || [];
+    englishText.match(/[^.!?]+[.!?]+["'”’)\]]*|[^.!?]+$/g) || [];
 
   return sentences
     .map((sentence) => sentence.replace(/\s+/g, " ").trim())
@@ -869,9 +869,16 @@ function isEnglishLine(line: string) {
   return latin >= 4 && latin * 2 >= hangul;
 }
 
-// Removes Korean inserted into an English line, keeping the English text.
+// EBS program names that appear inside English text as proper nouns.
+// They must stay in the sentence so the meaning is preserved.
+const KEEP_HANGUL_TERMS = new Set(["입트영", "귀트영"]);
+
+// Removes Korean inserted into an English line, keeping the English text and
+// known program names.
 function stripHangulInserts(text: string) {
-  const withoutHangul = text.replace(/[가-힣ㄱ-ㆎ]+/g, " ");
+  const withoutHangul = text.replace(/[가-힣ㄱ-ㆎ]+/g, (token) =>
+    KEEP_HANGUL_TERMS.has(token) ? token : " "
+  );
   const withoutEmptyBrackets = withoutHangul.replace(/\(\s*\)|\[\s*\]/g, " ");
 
   return removeUnmatchedBrackets(withoutEmptyBrackets)
