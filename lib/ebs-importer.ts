@@ -1140,13 +1140,38 @@ function normalizeCards(cards: Card[]) {
 }
 
 function normalizeCard(card: Card): Card {
-  const front = normalizeFront(card.front);
-  const back = normalizeBack(front, card.back);
+  const moved = moveTrailingNumberToBack(normalizeFront(card.front), card.back);
+  const front = normalizeFront(moved.front);
+  const back = normalizeBack(front, moved.back);
 
   return {
     front,
     back
   };
+}
+
+// Source text like "4인 가족" can be split into "a family of four 4" (front) and
+// "인 가족" (back). A trailing 1–2 digit number after English words belongs on the
+// Korean side. Years (e.g. 2026) and numbers already present on the back are kept.
+function moveTrailingNumberToBack(front: string, back: string) {
+  const match = front.match(/^(.*[A-Za-z])\s+(\d{1,2})$/);
+
+  if (!match || !hasHangul(back)) {
+    return { front, back };
+  }
+
+  const [, englishPart, digits] = match;
+  const trimmedBack = back.trim();
+
+  if (trimmedBack.startsWith(digits)) {
+    return { front: englishPart, back: trimmedBack };
+  }
+
+  if (trimmedBack.includes(digits)) {
+    return { front, back: trimmedBack };
+  }
+
+  return { front: englishPart, back: `${digits}${trimmedBack}` };
 }
 
 function normalizeFront(value: string) {
