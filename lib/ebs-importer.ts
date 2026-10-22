@@ -862,6 +862,7 @@ function splitEnglishSentences(lines: string[]) {
   const englishText = lines
     .filter((line) => !/^EBS\s*/.test(line))
     .filter((line) => !isHeadingLine(line))
+    .filter((line) => !isTitleLikeLine(line))
     .filter(isEnglishLine)
     .map(stripHangulInserts)
     .filter(Boolean)
@@ -873,6 +874,13 @@ function splitEnglishSentences(lines: string[]) {
   return sentences
     .map((sentence) => sentence.replace(/\s+/g, " ").trim())
     .filter((sentence) => sentence.length >= 8 && /[A-Za-z]{2,}/.test(sentence));
+}
+
+// A short English title line without sentence punctuation (e.g. "Meeting Friends
+// Through Children") is a heading, not a sentence. Joining it would glue it to the
+// first body sentence.
+function isTitleLikeLine(line: string) {
+  return line.length <= 60 && !/[.!?]/.test(line) && /^[A-Z][A-Za-z'’ ,-]+$/.test(line);
 }
 
 // Page headings and IDs (e.g. "alone36", "Getting into “입트영”", "#tag") must not
@@ -1292,8 +1300,14 @@ function parseEnglishKoreanLine(line: string): Card | null {
     return null;
   }
 
-  const front = clean.slice(0, hangulMatch.index).trim();
-  const back = clean.slice(hangulMatch.index).trim();
+  let front = clean.slice(0, hangulMatch.index).trim();
+  let back = clean.slice(hangulMatch.index).trim();
+
+  // "arrange a playdate (아이들) 놀이…": keep the opening parenthesis with the Korean.
+  if (front.endsWith("(")) {
+    front = front.slice(0, -1).trim();
+    back = `(${back}`;
+  }
 
   if (!front || !back || !/[A-Za-z~]/.test(front)) {
     return null;
@@ -1509,15 +1523,23 @@ function isScriptHeading(line: string) {
   return /script|listening|\uC2A4\uD06C\uB9BD\uD2B8|\uB4E3\uAE30|\uC9C0\uBB38/i.test(line);
 }
 
+// Headings are short labels. Long lines (e.g. the date/title line that mentions
+// "단어") must not be treated as a section heading.
+function isShortHeadingLine(line: string) {
+  return line.length <= 40;
+}
+
 function isKeyExpressionsHeading(line: string) {
-  return /key\s+expressions|\uC8FC\uC694\s*\uD45C\uD604|\uB2E8\uC5B4/i.test(
-    line
+  return (
+    isShortHeadingLine(line) &&
+    /key\s+expressions|\uC8FC\uC694\s*\uD45C\uD604|\uB2E8\uC5B4/i.test(line)
   );
 }
 
 function isWordHeading(line: string) {
-  return /key\s+expressions|vocab|vocabulary|words?|\uC8FC\uC694\s*\uD45C\uD604|\uB2E8\uC5B4|\uC5B4\uD718/i.test(
-    line
+  return (
+    isShortHeadingLine(line) &&
+    /key\s+expressions|vocab|vocabulary|words?|\uC8FC\uC694\s*\uD45C\uD604|\uB2E8\uC5B4|\uC5B4\uD718/i.test(line)
   );
 }
 
@@ -1528,7 +1550,10 @@ function isExpressionHeading(line: string) {
 }
 
 function isPatternHeading(line: string) {
-  return /pattern\s+practice|patterns?|\uD328\uD134|\uBB38\uD615/i.test(line);
+  return (
+    isShortHeadingLine(line) &&
+    /pattern\s+practice|patterns?|\uD328\uD134|\uBB38\uD615/i.test(line)
+  );
 }
 
 function isPracticeHeading(line: string) {
