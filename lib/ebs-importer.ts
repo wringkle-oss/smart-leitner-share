@@ -673,8 +673,19 @@ function extractContentLines(program: EbsProgram, html: string, date: string) {
 async function buildIpteSections(lines: string[]) {
   const keyIndex = lines.findIndex(isKeyExpressionsHeading);
   const patternIndex = lines.findIndex(isPatternHeading);
+  // "Dialogue Practice" heading ends the pattern section. Only "A:"/"B:" with a
+  // colon starts dialogue, so English sentences beginning with "A " are not
+  // mistaken for speaker lines.
+  const dialogueHeadingIndex = lines.findIndex((line, index) => {
+    return index > Math.max(patternIndex, keyIndex) && /dialogue\s+practice/i.test(line);
+  });
   const dialogIndex = lines.findIndex((line, index) => {
-    return index > Math.max(patternIndex, keyIndex) && isDialogueLine(line);
+    return index > Math.max(patternIndex, keyIndex) && isDialogueStartLine(line);
+  });
+  const dialogStart = dialogueHeadingIndex >= 0 ? dialogueHeadingIndex + 1 : dialogIndex;
+  // "VOCABULARY TIPS" and everything after it is not part of the dialogue deck.
+  const tipsIndex = lines.findIndex((line, index) => {
+    return index > Math.max(dialogStart, 0) && /vocabulary\s+tips/i.test(line);
   });
 
   const bodyLines = lines.slice(0, positiveOrEnd(keyIndex, lines.length));
@@ -684,9 +695,12 @@ async function buildIpteSections(lines: string[]) {
   );
   const patternLines = lines.slice(
     patternIndex >= 0 ? patternIndex + 1 : lines.length,
-    positiveOrEnd(dialogIndex, lines.length)
+    positiveOrEnd(dialogueHeadingIndex >= 0 ? dialogueHeadingIndex : dialogIndex, lines.length)
   );
-  const dialogLines = dialogIndex >= 0 ? lines.slice(dialogIndex) : [];
+  const dialogLines =
+    dialogStart >= 0
+      ? lines.slice(dialogStart, positiveOrEnd(tipsIndex, lines.length))
+      : [];
 
   return [
     {
@@ -1522,7 +1536,13 @@ function isPracticeHeading(line: string) {
 }
 
 function isDialogueLine(line: string) {
-  return /^[AB]\s+/.test(line) || /^[AB]\s*[:\uFF1A]/.test(line);
+  return /^[AB]\s*[:\uFF1A]/.test(line);
+}
+
+// Only a speaker label with a colon starts a dialogue. Without the colon, an
+// English sentence such as "A deep and true connection\u2026" would look like a speaker.
+function isDialogueStartLine(line: string) {
+  return isDialogueLine(line);
 }
 
 function positiveOrEnd(index: number, end: number) {
