@@ -10,34 +10,43 @@ export async function GET(request: Request) {
 
   return runImport({
     force: isTruthy(url.searchParams.get("force")),
+    preview: isTruthy(url.searchParams.get("preview")),
+    date: normalizeDate(url.searchParams.get("date")),
     program: normalizeProgramSelector(url.searchParams.get("program"))
   });
 }
 
 export async function POST(request: Request) {
   let force = false;
+  let preview = false;
+  let date: string | null = null;
   let program = normalizeProgramSelector(null);
 
   try {
     const body = await request.json();
     force = Boolean(body?.force);
+    preview = Boolean(body?.preview);
+    date = normalizeDate(body?.date);
     program = normalizeProgramSelector(body?.program);
   } catch {
     force = false;
   }
 
-  return runImport({ force, program });
+  return runImport({ force, preview, date, program });
 }
 
 async function runImport(options: {
   force: boolean;
+  preview: boolean;
+  date: string | null;
   program: ReturnType<typeof normalizeProgramSelector>;
 }) {
-  const date = getSeoulDate();
+  const date = options.date || getSeoulDate();
 
   try {
     const result = await importDailyEbsPrograms(date, options.program, {
-      force: options.force
+      force: options.force,
+      preview: options.preview
     });
     const status =
       "status" in result && result.status === "failed" ? 500 : 200;
@@ -62,6 +71,13 @@ async function runImport(options: {
       { status: 500 }
     );
   }
+}
+
+// Accepts YYYY-MM-DD only; anything else falls back to today in Seoul.
+function normalizeDate(value: unknown) {
+  const raw = typeof value === "string" ? value.trim() : "";
+
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : null;
 }
 
 function isTruthy(value: string | null) {
