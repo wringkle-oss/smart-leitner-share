@@ -801,38 +801,40 @@ async function buildIpteSections(lines: string[]) {
   ] satisfies EbsSection[];
 }
 
-// 귀트영 produces two decks only: WORD (words/expressions) and SENT (script
-// sentences). Tips, practice and anything after them are ignored.
+// 귀트영 produces two decks only: WORD and SENT.
+// A post is split into parts ("* Part1", "Part 2", ...). Each part has an English
+// paragraph (with superscript markers like ¹²³), its Korean translation, and a
+// numbered word list ("1 personalized book recommendations 개인 맞춤형 도서 추천").
+// Without part markers the whole post is treated as one part.
 async function buildGwiteSections(lines: string[]) {
   const endIndex = positiveOrEnd(lines.findIndex(isGwiteEndHeading), lines.length);
-  const scoped = lines.slice(0, endIndex);
-  const scriptIndex = scoped.findIndex(isScriptHeading);
-  const wordIndex = scoped.findIndex(
-    (line, index) => index > scriptIndex && isWordHeading(line)
-  );
-  const exprIndex = scoped.findIndex(
-    (line, index) =>
-      index > Math.max(scriptIndex, wordIndex) && isExpressionHeading(line)
-  );
-  const vocabStart = firstPositiveOrEnd([wordIndex, exprIndex], scoped.length);
-  const scriptStart = scriptIndex >= 0 && scriptIndex < vocabStart ? scriptIndex + 1 : 0;
-  const scriptLines = scoped.slice(scriptStart, vocabStart);
-  const vocabLines = scoped
-    .slice(vocabStart + 1)
-    .filter((_, offset) => vocabStart + 1 + offset !== exprIndex);
+  const parts = splitGwiteParts(lines.slice(0, endIndex));
+  const wordLines: string[] = [];
+  const sentenceLines: string[] = [];
+  const wordCards: Card[] = [];
+  const sentenceCards: Card[] = [];
+
+  for (const part of parts) {
+    const parsed = parseGwitePart(part);
+
+    wordLines.push(...parsed.wordLines);
+    sentenceLines.push(...parsed.englishParagraphs, ...parsed.koreanParagraphs);
+    wordCards.push(...parsed.wordCards);
+    sentenceCards.push(...parsed.sentenceCards);
+  }
 
   return [
     {
       key: "WORD" as const,
       label: gwiteLabels.WORD,
-      lines: vocabLines,
-      cards: buildTermCards(vocabLines)
+      lines: wordLines,
+      cards: normalizeCards(wordCards)
     },
     {
       key: "SENT" as const,
       label: gwiteLabels.SENT,
-      lines: scriptLines,
-      cards: buildTranslatedSentenceCards(scriptLines)
+      lines: sentenceLines,
+      cards: dedupeCards(sentenceCards)
     }
   ] satisfies EbsSection[];
 }
@@ -847,37 +849,101 @@ function isGwiteEndHeading(line: string) {
   );
 }
 
-// If every English line is followed by its Korean translation, pair them.
-// Otherwise fall back to English-only sentence cards (same as 입트영 BODY).
-function buildTranslatedSentenceCards(lines: string[]) {
-  const cleaned = lines
-    .filter((line) => !/^EBS\s*/.test(line))
-    .filter((line) => !isHeadingLine(line))
-    .filter((line) => !isTitleLikeLine(line));
-  const pairs: Card[] = [];
-  let englishCount = 0;
+function isGwitePartMarker(line: string) {
+  return /^\*?\s*part\.?\s*\d+\s*:?$/i.test(line);
+}
 
-  for (let index = 0; index < cleaned.length; index += 1) {
-    const line = cleaned[index];
+function splitGwiteParts(lines: string[]) {
+  const markerIndexes = lines
+    .map((line, index) => (isGwitePartMarker(line) ? index : -1))
+    .filter((index) => index >= 0);
 
-    if (!isEnglishLine(line)) {
+  if (markerIndexes.length === 0) {
+    return [lines];
+  }
+
+  // Lines before the first part (title, date) are not lesson content.
+  return markerIndexes.map((start, position) =>
+    lines.slice(start + 1, markerIndexes[position + 1] ?? lines.length)
+  );
+}
+
+// "1 personalized book recommendations 개인 맞춤형 도서 추천"
+function isGwiteWordLine(line: string) {
+  return /^\d+[.)]?\s+[A-Za-z~]/.test(line) && hasHangul(line);
+}
+
+function stripSuperscriptMarkers(text: string) {
+  return text
+    .replace(/[\u00B9\u00B2\u00B3\u2070\u2074-\u2079]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function splitIntoSentences(text: string) {
+  return (text.match(/[^.!?]+[.!?]+["'\u201D\u2019)\]]*|[^.!?]+$/g) || [])
+    .map((sentence) => sentence.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function parseGwitePart(lines: string[]) {
+  const wordLines: string[] = [];
+  const englishParagraphs: string[] = [];
+  const koreanParagraphs: string[] = [];
+
+  for (const line of lines) {
+    if (/^EBS\s*/.test(line) || isHeadingLine(line) || isTitleLikeLine(line)) {
       continue;
     }
 
-    englishCount += 1;
-    const next = cleaned[index + 1];
-
-    if (next && hasHangul(next) && !isEnglishLine(next)) {
-      pairs.push({ front: stripHangulInserts(line), back: next });
-      index += 1;
+    if (isGwiteWordLine(line)) {
+      wordLines.push(line);
+    } else if (isEnglishLine(line)) {
+      englishParagraphs.push(stripSuperscriptMarkers(stripHangulInserts(line)));
+    } else if (hasHangul(line)) {
+      koreanParagraphs.push(line.replace(/\s+/g, " ").trim());
     }
   }
 
-  if (englishCount > 0 && pairs.length === englishCount) {
-    return dedupeCards(pairs);
+  const wordCards = wordLines
+    .map((line) => parseEnglishKoreanLine(line.replace(/^\d+[.)]?\s+/, "")))
+    .filter((card): card is Card => !!card);
+
+  return {
+    wordLines,
+    englishParagraphs,
+    koreanParagraphs,
+    wordCards,
+    sentenceCards: pairGwiteSentences(englishParagraphs, koreanParagraphs)
+  };
+}
+
+// Pair sentence by sentence. English and Korean are joined per part first, so a
+// paragraph split across several lines in the HTML still lines up. If sentence
+// counts differ, pair line by line when the line counts match; otherwise keep the
+// English sentences and use BODY_BACK_MODE for the back (same as 입트영 BODY).
+function pairGwiteSentences(english: string[], korean: string[]) {
+  const englishSentences = splitIntoSentences(english.join(" "));
+  const koreanSentences = splitIntoSentences(korean.join(" "));
+
+  if (englishSentences.length > 0 && englishSentences.length === koreanSentences.length) {
+    return englishSentences.map((sentence, index) => ({
+      front: sentence,
+      back: koreanSentences[index]
+    }));
   }
 
-  return buildSentenceCards(cleaned);
+  if (english.length > 0 && english.length === korean.length) {
+    return english.map((paragraph, index) => ({
+      front: paragraph,
+      back: korean[index]
+    }));
+  }
+
+  return englishSentences.map((sentence) => ({
+    front: sentence,
+    back: getUntranslatedBodyBack(sentence)
+  }));
 }
 
 async function buildStartSections(lines: string[]) {
