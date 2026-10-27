@@ -16,7 +16,8 @@ type SectionKey =
   | "SCRIPT"
   | "EXPR"
   | "CLOZE"
-  | "PRACTICE";
+  | "PRACTICE"
+  | "SENT";
 
 type EbsSection = {
   key: SectionKey;
@@ -27,6 +28,8 @@ type EbsSection = {
 
 type ImportOptions = {
   force?: boolean;
+  // Parse and return what would be saved, without writing any decks.
+  preview?: boolean;
 };
 
 type NaverPostListItem = {
@@ -74,7 +77,7 @@ type EbsProgram = {
 
 export type ImportDailyEbsResult = {
   ok: boolean;
-  status: "created" | "updated" | "skipped" | "not_found" | "failed";
+  status: "created" | "updated" | "skipped" | "not_found" | "failed" | "preview";
   date: string;
   program: ProgramId;
   programName: string;
@@ -93,6 +96,17 @@ export type ImportDailyEbsResult = {
   }>;
   debug: ImportDebug;
   error?: string;
+  preview?: {
+    lineCount: number;
+    lines: string[];
+    parseError: string | null;
+    sections: Array<{
+      key: SectionKey;
+      label: string;
+      lineCount: number;
+      cards: Card[];
+    }>;
+  };
 };
 
 export type ImportAllEbsResult = {
@@ -116,7 +130,8 @@ const gwiteLabels: Record<string, string> = {
   SCRIPT: "\uC2A4\uD06C\uB9BD\uD2B8",
   WORD: "\uB2E8\uC5B4",
   EXPR: "\uD45C\uD604",
-  CLOZE: "\uBE48\uCE78"
+  CLOZE: "\uBE48\uCE78",
+  SENT: "\uBB38\uC7A5"
 };
 
 const startLabels: Record<string, string> = {
@@ -149,6 +164,7 @@ const EBS_PROGRAMS: Record<ProgramId, EbsProgram> = {
     programName: "\uADC0\uD2B8\uC601",
     deckPrefix: "GTE",
     categoryEnvKey: "EBS_GWITE_CATEGORY_NO",
+    defaultCategoryNo: 69,
     categoryHints: [
       /\uADC0\uD2B8\uC601/i,
       /\uADC0\uAC00\s*\uD2B8\uC774\uB294\s*\uC601\uC5B4/i
@@ -272,6 +288,11 @@ async function importDailyEbsProgram(
 
   const html = await fetchText(post.sourceUrl);
   const lines = extractContentLines(program, html, date);
+
+  if (options.preview) {
+    return buildPreviewResult(program, date, post.sourceUrl, lines, debug);
+  }
+
   const sections = await program.buildSections(lines);
   const createdDecks: string[] = [];
   const updatedDecks: string[] = [];
@@ -373,6 +394,56 @@ async function importDailyEbsProgram(
     warnings,
     sections: savedSections,
     debug
+  };
+}
+
+async function buildPreviewResult(
+  program: EbsProgram,
+  date: string,
+  sourceUrl: string,
+  lines: string[],
+  debug: ImportDebug
+): Promise<ImportDailyEbsResult> {
+  let sections: EbsSection[] = [];
+  let parseError: string | null = null;
+
+  try {
+    sections = await program.buildSections(lines);
+  } catch (error) {
+    parseError = error instanceof Error ? error.message : String(error);
+  }
+
+  return {
+    ok: !parseError,
+    status: "preview",
+    date,
+    program: program.id,
+    programName: program.programName,
+    sourceUrl,
+    createdDecks: [],
+    updatedDecks: [],
+    skippedDecks: [],
+    warnings: [],
+    sections: [],
+    debug: {
+      ...debug,
+      sourceUrl,
+      parsedSectionNames: sections.map((section) => section.key),
+      deckCardCounts: Object.fromEntries(
+        sections.map((section) => [section.key, section.cards.length])
+      )
+    },
+    preview: {
+      lineCount: lines.length,
+      lines,
+      parseError,
+      sections: sections.map((section) => ({
+        key: section.key,
+        label: section.label,
+        lineCount: section.lines.length,
+        cards: section.cards
+      }))
+    }
   };
 }
 
@@ -730,51 +801,83 @@ async function buildIpteSections(lines: string[]) {
   ] satisfies EbsSection[];
 }
 
+// 귀트영 produces two decks only: WORD (words/expressions) and SENT (script
+// sentences). Tips, practice and anything after them are ignored.
 async function buildGwiteSections(lines: string[]) {
-  const scriptIndex = lines.findIndex(isScriptHeading);
-  const wordIndex = lines.findIndex(isWordHeading);
-  const exprIndex = lines.findIndex((line, index) => {
-    return index > positiveOrEnd(wordIndex, 0) && isExpressionHeading(line);
-  });
-  const firstHeading = firstPositiveOrEnd(
-    [wordIndex, exprIndex].filter((index) => index !== scriptIndex),
-    lines.length
+  const endIndex = positiveOrEnd(lines.findIndex(isGwiteEndHeading), lines.length);
+  const scoped = lines.slice(0, endIndex);
+  const scriptIndex = scoped.findIndex(isScriptHeading);
+  const wordIndex = scoped.findIndex(
+    (line, index) => index > scriptIndex && isWordHeading(line)
   );
-  const scriptStart = scriptIndex >= 0 ? scriptIndex + 1 : 0;
-  const scriptLines = lines.slice(scriptStart, firstHeading);
-  const wordLines = wordIndex >= 0
-    ? lines.slice(wordIndex + 1, positiveOrEnd(exprIndex, lines.length))
-    : [];
-  const exprLines = exprIndex >= 0 ? lines.slice(exprIndex + 1) : [];
-  const scriptCards = buildSentenceCards(scriptLines);
-  const exprCards = buildTermCards(exprLines);
+  const exprIndex = scoped.findIndex(
+    (line, index) =>
+      index > Math.max(scriptIndex, wordIndex) && isExpressionHeading(line)
+  );
+  const vocabStart = firstPositiveOrEnd([wordIndex, exprIndex], scoped.length);
+  const scriptStart = scriptIndex >= 0 && scriptIndex < vocabStart ? scriptIndex + 1 : 0;
+  const scriptLines = scoped.slice(scriptStart, vocabStart);
+  const vocabLines = scoped
+    .slice(vocabStart + 1)
+    .filter((_, offset) => vocabStart + 1 + offset !== exprIndex);
 
   return [
     {
-      key: "SCRIPT" as const,
-      label: gwiteLabels.SCRIPT,
-      lines: scriptLines,
-      cards: scriptCards
-    },
-    {
       key: "WORD" as const,
       label: gwiteLabels.WORD,
-      lines: wordLines,
-      cards: buildTermCards(wordLines)
+      lines: vocabLines,
+      cards: buildTermCards(vocabLines)
     },
     {
-      key: "EXPR" as const,
-      label: gwiteLabels.EXPR,
-      lines: exprLines,
-      cards: exprCards
-    },
-    {
-      key: "CLOZE" as const,
-      label: gwiteLabels.CLOZE,
+      key: "SENT" as const,
+      label: gwiteLabels.SENT,
       lines: scriptLines,
-      cards: buildClozeCards(scriptCards, exprCards)
+      cards: buildTranslatedSentenceCards(scriptLines)
     }
   ] satisfies EbsSection[];
+}
+
+function isGwiteEndHeading(line: string) {
+  return (
+    line.startsWith("#") ||
+    (isShortHeadingLine(line) &&
+      /vocabulary\s+tips|composition|one\s+more\s+dialog|quiz|dictation|\uBC1B\uC544\uC4F0\uAE30|\uC791\uBB38/i.test(
+        line
+      ))
+  );
+}
+
+// If every English line is followed by its Korean translation, pair them.
+// Otherwise fall back to English-only sentence cards (same as 입트영 BODY).
+function buildTranslatedSentenceCards(lines: string[]) {
+  const cleaned = lines
+    .filter((line) => !/^EBS\s*/.test(line))
+    .filter((line) => !isHeadingLine(line))
+    .filter((line) => !isTitleLikeLine(line));
+  const pairs: Card[] = [];
+  let englishCount = 0;
+
+  for (let index = 0; index < cleaned.length; index += 1) {
+    const line = cleaned[index];
+
+    if (!isEnglishLine(line)) {
+      continue;
+    }
+
+    englishCount += 1;
+    const next = cleaned[index + 1];
+
+    if (next && hasHangul(next) && !isEnglishLine(next)) {
+      pairs.push({ front: stripHangulInserts(line), back: next });
+      index += 1;
+    }
+  }
+
+  if (englishCount > 0 && pairs.length === englishCount) {
+    return dedupeCards(pairs);
+  }
+
+  return buildSentenceCards(cleaned);
 }
 
 async function buildStartSections(lines: string[]) {
@@ -1520,7 +1623,10 @@ function isUsefulLine(line: string) {
 }
 
 function isScriptHeading(line: string) {
-  return /script|listening|\uC2A4\uD06C\uB9BD\uD2B8|\uB4E3\uAE30|\uC9C0\uBB38/i.test(line);
+  return (
+    isShortHeadingLine(line) &&
+    /script|listening|\uC2A4\uD06C\uB9BD\uD2B8|\uB4E3\uAE30|\uC9C0\uBB38/i.test(line)
+  );
 }
 
 // Headings are short labels. Long lines (e.g. the date/title line that mentions
@@ -1544,8 +1650,9 @@ function isWordHeading(line: string) {
 }
 
 function isExpressionHeading(line: string) {
-  return /expressions?|phrases?|\uD45C\uD604|\uC720\uC6A9\uD55C\s*\uD45C\uD604|\uAD6C\uBB38|\uC219\uC5B4/i.test(
-    line
+  return (
+    isShortHeadingLine(line) &&
+    /expressions?|phrases?|\uD45C\uD604|\uC720\uC6A9\uD55C\s*\uD45C\uD604|\uAD6C\uBB38|\uC219\uC5B4/i.test(line)
   );
 }
 
@@ -1557,7 +1664,10 @@ function isPatternHeading(line: string) {
 }
 
 function isPracticeHeading(line: string) {
-  return /practice|exercise|\uC5F0\uC2B5|\uC751\uC6A9/i.test(line);
+  return (
+    isShortHeadingLine(line) &&
+    /practice|exercise|\uC5F0\uC2B5|\uC751\uC6A9/i.test(line)
+  );
 }
 
 function isDialogueLine(line: string) {
